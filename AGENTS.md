@@ -11,7 +11,7 @@
 
 ## 工具链与命令
 
-- 这是私有的 pnpm/Turbo monorepo。使用 Node.js >=18 和根目录声明的 `pnpm@10.29.3`；workspace 为 `apps/*` 与 `packages/*`，lockfile 为 v9。
+- 这是私有的 pnpm/Turbo monorepo。统一使用 Node.js `>=24.15.0 <25` 和根目录声明的 `pnpm@11.18.0`；workspace 为 `apps/*` 与 `packages/*`，lockfile 为 v9。
 - 根目录检查命令为 `pnpm lint`、`pnpm check-types` 和 `pnpm build`。`pnpm dev` 先通过 `dotenv` 加载 `.env.local`，再启动 Turbo task。
 - `pnpm format` 与 `pnpm lint:fix` 会重写文件。共享 lint 规则还强制执行 Prettier 格式、import 排序和移除未使用的 import；允许以下划线开头的变量。
 
@@ -38,7 +38,7 @@
 - PostgreSQL/Drizzle schema 位于 `apps/backend/src/db/schema.ts`；生成的 migration 应放在 `apps/backend/drizzle`。
 - `pnpm --filter backend db:generate` 读取根目录 `.env` 并生成 migration 文件；`pnpm --filter backend db:migrate` 读取根目录 `.env` 并修改所配置的数据库。仅在任务明确要求相应副作用时运行。
 - `pnpm dev:docker` 和 devcontainer attach 会安装依赖并运行 migration，不是无副作用的仓库检查或验证方式。
-- 已确认工具链版本存在偏差：根目录 `package.json` 声明 pnpm 10.29.3，而 `Dockerfile.dev` 安装 10.12.0。除非任务明确要求，否则不得同步这些版本。
+- Docker build、容器启动和 CI 中的依赖安装必须使用提交的唯一 `pnpm-lock.yaml` 与 `--frozen-lockfile`；非交互容器安装同时设置 `CI=true`，不得在镜像构建时临时 `pnpm add` 依赖。
 
 ## 项目协作
 
