@@ -1,18 +1,25 @@
 # DevContainer Dockerfile optimized for VS Code development
-FROM ghcr.io/astral-sh/uv:debian AS base
+ARG NODE_VERSION=24.15.0
+ARG PNPM_VERSION=11.18.0
 
-# Install Node.js, pnpm, and common development tools
+FROM ghcr.io/astral-sh/uv:0.12.0 AS uv
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+
+ARG NODE_VERSION
+ARG PNPM_VERSION
+
+# Install uv, the pinned pnpm version, and common development tools
+COPY --from=uv /uv /uvx /bin/
 RUN apt-get update && apt-get install -y \
     curl \
-    gnupg \
     git \
     vim \
     nano \
     postgresql-client \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && npm install -g pnpm@10.12.0 \
+    && npm install -g "pnpm@${PNPM_VERSION}" \
+    && test "$(node --version)" = "v${NODE_VERSION}" \
+    && test "$(pnpm --version)" = "${PNPM_VERSION}" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -53,7 +60,7 @@ COPY packages/zod-types/package.json ./packages/zod-types/
 
 # Install all dependencies (including dev dependencies)
 # This will be cached and reused when the volume is mounted
-RUN pnpm install
+RUN CI=true pnpm install --frozen-lockfile
 
 # Expose ports for frontend and backend
 EXPOSE 12008 12009
@@ -72,4 +79,4 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 # Default command for devcontainer - keeps container running for VS Code to connect
 # Can be overridden by devcontainer.json (overrideCommand: true) or docker-compose
 # To start services manually, run: ./docker-entrypoint-dev.sh
-CMD ["sleep", "infinity"] 
+CMD ["sleep", "infinity"]

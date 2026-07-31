@@ -52,7 +52,7 @@ echo "🔄 Hot reloading is enabled for both frontend and backend"
 
 # Ensure dependencies are up to date
 echo "📦 Checking dependencies..."
-pnpm install
+CI=true pnpm install --frozen-lockfile
 
 # Run database migrations for development
 echo "🛠 Running database migrations (dev)..."

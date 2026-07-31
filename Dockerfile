@@ -1,13 +1,19 @@
-# Use the official uv image as base
-FROM ghcr.io/astral-sh/uv:debian AS base
+ARG NODE_VERSION=24.15.0
+ARG PNPM_VERSION=11.18.0
 
-# Install Node.js and pnpm directly
+FROM ghcr.io/astral-sh/uv:0.12.0 AS uv
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+
+ARG NODE_VERSION
+ARG PNPM_VERSION
+
+# Install uv and the pinned pnpm version
+COPY --from=uv /uv /uvx /bin/
 RUN apt-get update && apt-get install -y \
     curl \
-    gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && npm install -g pnpm@10.12.0 \
+    && npm install -g "pnpm@${PNPM_VERSION}" \
+    && test "$(node --version)" = "v${NODE_VERSION}" \
+    && test "$(pnpm --version)" = "${PNPM_VERSION}" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,7 +36,7 @@ COPY packages/typescript-config/package.json ./packages/typescript-config/
 COPY packages/zod-types/package.json ./packages/zod-types/
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN CI=true pnpm install --frozen-lockfile
 
 # Builder stage
 FROM base AS builder
@@ -95,13 +101,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/apps/backend/drizzle.config.ts ./
 COPY --from=builder --chown=nextjs:nodejs /app/packages ./packages
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nextjs:nodejs /app/pnpm-lock.yaml ./
 COPY --from=builder --chown=nextjs:nodejs /app/pnpm-workspace.yaml ./
 
 # Install production dependencies only
-RUN pnpm install --prod
-
-# Install drizzle-kit locally in backend for migrations
-RUN cd apps/backend && pnpm add drizzle-kit@0.31.1
+RUN CI=true pnpm install --prod --frozen-lockfile
 
 # Copy startup script
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./

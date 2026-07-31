@@ -20,9 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
@@ -33,9 +35,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @repo/zod-types --filter @repo/trpc build
@@ -47,9 +51,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
@@ -60,10 +66,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @repo/zod-types --filter @repo/trpc build
       - run: pnpm --filter backend test
+
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --file Dockerfile --tag metamcp:ci .
+      - name: Build development image
+        run: docker build --file Dockerfile.dev --tag metamcp-dev:ci .
+      - name: Build devcontainer image
+        run: docker build --file .devcontainer/Dockerfile --tag metamcp-devcontainer:ci .
