@@ -48,9 +48,20 @@ COPY . .
 # Build all packages and apps
 RUN pnpm build
 
-RUN sed -i -e "s/30000/600000/" \
-    "node_modules/.pnpm/next@15.5.12_react-dom@19.1.2_react@19.1.2__react@19.1.2/node_modules/next/dist/server/lib/router-utils/proxy-request.js" \
-    "node_modules/.pnpm/next@15.5.12_react-dom@19.1.2_react@19.1.2__react@19.1.2/node_modules/next/dist/esm/server/lib/router-utils/proxy-request.js"
+RUN set -eu; \
+    next_dir="apps/frontend/node_modules/next"; \
+    from="proxyTimeout: proxyTimeout === null ? undefined : proxyTimeout || 30000,"; \
+    to="proxyTimeout: proxyTimeout === null ? undefined : proxyTimeout || 600000,"; \
+    for file in \
+        "$next_dir/dist/server/lib/router-utils/proxy-request.js" \
+        "$next_dir/dist/esm/server/lib/router-utils/proxy-request.js"; do \
+        test -f "$file" || { echo "Missing Next proxy file: $file" >&2; exit 1; }; \
+        grep -qF "$from" "$file" || { echo "Missing expected timeout source in: $file" >&2; exit 1; }; \
+        sed -i "s#$from#$to#" "$file"; \
+        grep -qF "$to" "$file" || { echo "Failed to patch timeout in: $file" >&2; exit 1; }; \
+        ! grep -qF "$from" "$file" || { echo "Original timeout remains in: $file" >&2; exit 1; }; \
+        test "$(grep -Fc "$to" "$file")" -eq 1 || { echo "Unexpected patched timeout count in: $file" >&2; exit 1; }; \
+    done
 
 # Production runner stage
 FROM base AS runner
