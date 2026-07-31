@@ -157,7 +157,9 @@ streamableHttpRouter.post(
   authenticateApiKey,
   rateLimitMiddleware,
   async (req, res) => {
-    const authReq = req as ApiKeyAuthenticatedRequest;
+    const authReq = req as ApiKeyAuthenticatedRequest<{
+      endpoint_name: string;
+    }>;
     const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
@@ -317,7 +319,9 @@ streamableHttpRouter.delete(
   authenticateApiKey,
   rateLimitMiddleware,
   async (req, res) => {
-    const authReq = req as ApiKeyAuthenticatedRequest;
+    const authReq = req as ApiKeyAuthenticatedRequest<{
+      endpoint_name: string;
+    }>;
     const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 

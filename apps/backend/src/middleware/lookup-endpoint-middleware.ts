@@ -7,7 +7,7 @@ import { ApiKeyAuthenticatedRequest } from "./api-key-oauth.middleware";
 
 // Middleware to lookup endpoint by name and add namespace info to request
 export const lookupEndpoint = async (
-  req: express.Request,
+  req: express.Request<{ endpoint_name: string }>,
   res: express.Response,
   next: express.NextFunction,
 ) => {
@@ -24,7 +24,9 @@ export const lookupEndpoint = async (
     }
 
     // Add the endpoint info to the request for use in handlers
-    const authReq = req as ApiKeyAuthenticatedRequest;
+    const authReq = req as ApiKeyAuthenticatedRequest<{
+      endpoint_name: string;
+    }>;
     authReq.namespaceUuid = endpoint.namespace_uuid;
     authReq.endpointName = endpointName;
     authReq.endpoint = endpoint;

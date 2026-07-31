@@ -73,7 +73,9 @@ sseRouter.get(
   authenticateApiKey,
   rateLimitMiddleware,
   async (req, res) => {
-    const authReq = req as ApiKeyAuthenticatedRequest;
+    const authReq = req as ApiKeyAuthenticatedRequest<{
+      endpoint_name: string;
+    }>;
     const { namespaceUuid, endpointName } = authReq;
 
     try {

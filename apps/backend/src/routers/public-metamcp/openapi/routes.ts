@@ -22,7 +22,9 @@ openApiRouter.get(
   lookupEndpoint,
   authenticateApiKey,
   async (req, res) => {
-    const { endpointName } = req as ApiKeyAuthenticatedRequest;
+    const { endpointName } = req as ApiKeyAuthenticatedRequest<{
+      endpoint_name: string;
+    }>;
 
     // Return a simple HTML page with Swagger UI
     const html = `
@@ -81,7 +83,9 @@ openApiRouter.get(
   lookupEndpoint,
   authenticateApiKey,
   async (req, res) => {
-    const { namespaceUuid, endpointName } = req as ApiKeyAuthenticatedRequest;
+    const { namespaceUuid, endpointName } = req as ApiKeyAuthenticatedRequest<{
+      endpoint_name: string;
+    }>;
 
     try {
       // Get or create persistent OpenAPI session for this namespace
