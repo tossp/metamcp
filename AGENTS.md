@@ -18,7 +18,7 @@
 ## 验证范围
 
 - 根目录没有 `test` script。Backend 测试使用 `pnpm --filter backend test`，coverage 使用 `pnpm --filter backend test:coverage`。
-- 根目录的 `pnpm check-types` 当前仅覆盖 `frontend` 和 `@repo/zod-types`，不会检查 `backend` 或全部 workspace；不得称其为全仓库类型验证。
+- 根目录的 `pnpm check-types` 当前覆盖 `backend`、`frontend` 和 `@repo/zod-types`，但不覆盖全部 workspace；不得称其为全仓库类型验证。
 - 验证应匹配变更边界：Backend 行为使用 Backend 测试命令；仅在实际覆盖范围内补充根目录 lint/build 或有限的类型检查。
 
 ## 架构边界
