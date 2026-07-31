@@ -20,7 +20,6 @@ services:
       
       # Application URL configuration
       APP_URL: ${APP_URL:-http://localhost:12008}
-      NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:12008}
       
       # Auth configuration
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-your-super-secret-key-change-this-in-production}

@@ -2,11 +2,12 @@ import "./globals.css";
 
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { PublicEnvScript } from "next-runtime-env";
+import { connection } from "next/server";
 import { Toaster } from "sonner";
 
 import { ThemeProvider } from "../components/providers/theme-provider";
 import { TRPCProvider } from "../components/providers/trpc-provider";
+import { APP_URL_SCRIPT_ID, getAppUrl, serializeAppUrl } from "../lib/env";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -27,11 +28,18 @@ interface RootLayoutProps {
   children: React.ReactNode;
 }
 
-export default function RootLayout({ children }: RootLayoutProps) {
+export default async function RootLayout({ children }: RootLayoutProps) {
+  await connection();
+  const serializedAppUrl = serializeAppUrl(getAppUrl());
+
   return (
     <html suppressHydrationWarning>
       <head>
-        <PublicEnvScript />
+        <script
+          id={APP_URL_SCRIPT_ID}
+          type="application/json"
+          dangerouslySetInnerHTML={{ __html: serializedAppUrl }}
+        />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
         <ThemeProvider>
