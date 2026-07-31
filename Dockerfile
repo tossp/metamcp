@@ -1,7 +1,7 @@
 ARG NODE_VERSION=24.15.0
 ARG PNPM_VERSION=11.18.0
 
-FROM ghcr.io/astral-sh/uv:debian AS uv
+FROM ghcr.io/astral-sh/uv:0.12.0 AS uv
 FROM node:${NODE_VERSION}-bookworm-slim AS base
 
 ARG NODE_VERSION
