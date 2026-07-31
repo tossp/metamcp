@@ -1,0 +1,38 @@
+name: Sync upstream mirror
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync-upstream-mirror:
+    name: sync-upstream-mirror
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out mirror branch
+        uses: actions/checkout@v4
+        with:
+          ref: upstream-mirror
+          fetch-depth: 0
+
+      - name: Fast-forward from upstream ai-dev
+        env:
+          UPSTREAM_URL: https://github.com/metatool-ai/metamcp.git
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream ai-dev
+          if ! git merge-base --is-ancestor HEAD upstream/ai-dev; then
+            echo "::error title=Upstream mirror is not fast-forward::upstream-mirror is not an ancestor of upstream/ai-dev; refusing to push."
+            exit 1
+          fi
+          git merge --ff-only upstream/ai-dev
+          git push origin HEAD:upstream-mirror
