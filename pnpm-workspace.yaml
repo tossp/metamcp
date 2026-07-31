@@ -35,3 +35,4 @@ minimumReleaseAgeExclude:
   - '@types/react@19.2.18'
   - eslint-plugin-turbo@2.10.8
   - turbo@2.10.8
+  - execa@10.0.1

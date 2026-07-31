@@ -10,7 +10,9 @@ import {
 } from "../lib/auth-rate-limiter";
 
 // Extend Express Request interface for our custom properties
-export interface ApiKeyAuthenticatedRequest extends express.Request {
+export interface ApiKeyAuthenticatedRequest<
+  Params = Record<string, string>,
+> extends express.Request<Params> {
   namespaceUuid: string;
   endpointName: string;
   endpoint: DatabaseEndpoint;
