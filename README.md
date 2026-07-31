@@ -28,7 +28,7 @@
 
 **MetaMCP** is a MCP proxy that lets you dynamically aggregate MCP servers into a unified MCP server, and apply middlewares. MetaMCP itself is a MCP server so it can be easily plugged into **ANY** MCP clients.
 
-> This is the independently maintained `tossp/metamcp` fork. See [FORK.md](FORK.md) for its upstream sync, CI, and release policy.
+> This is the independently maintained `tossp/metamcp` fork.
 
 ![MetaMCP Diagram](metamcp.svg)
 

@@ -22,7 +22,7 @@
 
 **MetaMCP** 是一个 MCP 代理，允许你动态聚合 MCP 服务器为统一的 MCP 服务器，并应用中间件。MetaMCP 本身也是一个 MCP 服务器，因此可以轻松接入**任何** MCP 客户端。
 
-> 这是由 `tossp/metamcp` 独立维护的分叉。上游同步、CI 与发布策略见 [FORK.md](FORK.md)。
+> 这是由 `tossp/metamcp` 独立维护的分叉。
 
 ![MetaMCP Diagram](metamcp.svg)
 
