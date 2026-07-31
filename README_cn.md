@@ -12,8 +12,8 @@
   <a href="https://opensource.org/licenses/MIT" style="text-decoration: none;">
     <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT License" style="max-width: 100%;">
   </a>
-  <a href="https://github.com/metatool-ai/metamcp/pkgs/container/metamcp" style="text-decoration: none;">
-    <img src="https://img.shields.io/badge/GHCR-available-green.svg?style=flat-square&logo=github" alt="GHCR" style="max-width: 100%;">
+  <a href="https://github.com/tossp/metamcp/pkgs/container/metamcp" style="text-decoration: none;">
+    <img src="https://img.shields.io/badge/GHCR-ts-green.svg?style=flat-square&logo=github" alt="GHCR ts 镜像" style="max-width: 100%;">
   </a>
   <a href="https://deepwiki.com/metatool-ai/metamcp"><img src="https://img.shields.io/badge/DeepWiki-metatool--ai%2Fmetamcp-blue.svg?style=flat-square&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki: MetaMCP"></a>
 </div>
@@ -21,6 +21,8 @@
 </div>
 
 **MetaMCP** 是一个 MCP 代理，允许你动态聚合 MCP 服务器为统一的 MCP 服务器，并应用中间件。MetaMCP 本身也是一个 MCP 服务器，因此可以轻松接入**任何** MCP 客户端。
+
+> 这是由 `tossp/metamcp` 独立维护的分叉。上游同步、CI 与发布策略见 [FORK.md](FORK.md)。
 
 ![MetaMCP Diagram](metamcp.svg)
 
@@ -115,11 +117,13 @@ MCP 服务器配置，告诉 MetaMCP 如何启动 MCP 服务器。
 克隆仓库，准备 `.env` 文件，并用 docker compose 启动：
 
 ```bash
-git clone https://github.com/metatool-ai/metamcp.git
+git clone https://github.com/tossp/metamcp.git
 cd metamcp
 cp example.env .env
 docker compose up -d
 ```
+
+Compose 文件跟随本分叉的滚动通道 `ghcr.io/tossp/metamcp:ts`。首次切换期间，必须等本基线合并且 `ts` 发布工作流首次成功后该镜像才可用；在包和 digest 可见之前，请保留现有可工作的部署。
 
 如果你修改了 APP_URL 环境变量，确保只从 APP_URL 访问，因为 MetaMCP 在该 URL 上强制执行 CORS 策略，其他 URL 无法访问。
 

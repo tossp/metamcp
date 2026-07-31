@@ -57,11 +57,11 @@ FROM base AS runner
 WORKDIR /app
 
 # OCI image labels
-LABEL org.opencontainers.image.source="https://github.com/metatool-ai/metamcp"
+LABEL org.opencontainers.image.source="https://github.com/tossp/metamcp"
 LABEL org.opencontainers.image.description="MetaMCP - aggregates MCP servers into a unified MetaMCP"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="MetaMCP"
-LABEL org.opencontainers.image.vendor="metatool-ai"
+LABEL org.opencontainers.image.vendor="tossp"
 
 # Install curl for health checks
 RUN apt-get update && apt-get install -y curl postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -106,4 +106,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:12008/health || exit 1
 
 # Start both backend and frontend
-CMD ["./docker-entrypoint.sh"] 
+CMD ["./docker-entrypoint.sh"]
