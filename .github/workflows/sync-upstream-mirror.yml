@@ -27,8 +27,12 @@ jobs:
         env:
           UPSTREAM_URL: https://github.com/metatool-ai/metamcp.git
         run: |
+          set -euo pipefail
           git remote add upstream "$UPSTREAM_URL"
           git fetch --no-tags upstream ai-dev
-          git merge-base --is-ancestor HEAD upstream/ai-dev
+          if ! git merge-base --is-ancestor HEAD upstream/ai-dev; then
+            echo "::error title=Upstream mirror is not fast-forward::upstream-mirror is not an ancestor of upstream/ai-dev; refusing to push."
+            exit 1
+          fi
           git merge --ff-only upstream/ai-dev
           git push origin HEAD:upstream-mirror
