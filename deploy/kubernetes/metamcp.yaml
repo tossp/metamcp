@@ -42,8 +42,6 @@ spec:
               value: "postgresql://${METAMCP_POSTGRES_USER}:$(POSTGRES_PASSWORD)@metamcp-postgres.${METAMCP_NAMESPACE}.svc.cluster.local:5432/${METAMCP_POSTGRES_DB}"
             - name: APP_URL
               value: "${METAMCP_PUBLIC_URL}"
-            - name: NEXT_PUBLIC_APP_URL
-              value: "${METAMCP_PUBLIC_URL}"
             - name: BETTER_AUTH_SECRET
               valueFrom:
                 secretKeyRef:
