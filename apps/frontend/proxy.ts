@@ -49,10 +49,10 @@ function getLocale(request: NextRequest): string {
   return defaultLocale;
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  // Skip middleware for static files and API routes
+  // Skip proxy handling for static files and API routes
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/") ||
@@ -126,7 +126,7 @@ export async function middleware(request: NextRequest) {
 
     return NextResponse.next();
   } catch (error) {
-    console.error("Auth middleware error:", error);
+    console.error("Auth proxy error:", error);
     // On error, redirect to login (with locale)
     const loginUrl = new URL(`/${locale}/login`, request.url);
     loginUrl.searchParams.set("callbackUrl", pathnameWithoutLocale);
