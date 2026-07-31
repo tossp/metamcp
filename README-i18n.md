@@ -1,6 +1,6 @@
 # Internationalization (i18n) Setup
 
-This projects uses Next.js locale in middleware and client side translation.
+This project uses Next.js locale routing in Proxy and client-side translation.
 
 Default locale is en (English) while zh (Simplified Chinese) is supported. The author can recognize both languages so can better support the translation accuracy there, but you are welcomed to contribute more languages following this doc.
 
@@ -40,7 +40,7 @@ apps/frontend/
 │   └── useTranslations.ts       # Hook for client-side translations
 ├── components/
 │   └── language-switcher.tsx    # Language switching component
-└── middleware.ts                # Locale detection and routing
+└── proxy.ts                     # Locale detection and routing
 ```
 
 ## Usage
@@ -84,9 +84,9 @@ The application uses Next.js's App Router with locale segments:
 - English: `/mcp-servers`, `/settings`
 - Chinese: `/zh/mcp-servers`, `/zh/settings`
 
-### Middleware
+### Proxy
 
-The middleware in `middleware.ts` handles:
+The Proxy in `proxy.ts` handles:
 - Locale detection from URL, cookies, and Accept-Language header
 - Automatic redirects to appropriate locale
 - Authentication checks
@@ -182,7 +182,7 @@ function Header() {
 
 1. **Missing translations**: Check browser console for missing key warnings
 2. **Hydration errors**: Ensure consistent rendering between server and client
-3. **Locale not detected**: Check middleware configuration and URL structure
+3. **Locale not detected**: Check Proxy configuration and URL structure
 
 
 ## Contributing
@@ -192,4 +192,4 @@ When adding new features:
 1. Add English translations first
 2. Add other languages (you can use agent like Cursor to generate other files for other locale)
 3. Test both locales thoroughly
-4. Update this documentation if adding new patterns 
+4. Update this documentation if adding new patterns
