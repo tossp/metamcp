@@ -105,7 +105,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/pnpm-lock.yaml ./
 COPY --from=builder --chown=nextjs:nodejs /app/pnpm-workspace.yaml ./
 
 # Install production dependencies only
-RUN CI=true pnpm install --prod --frozen-lockfile
+RUN CI=true pnpm install --prod --frozen-lockfile && \
+    chown -R nextjs:nodejs /app
 
 # Copy startup script
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./
