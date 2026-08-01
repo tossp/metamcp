@@ -29,6 +29,12 @@ export type StdioServerParameters = {
   env?: Record<string, string>;
 
   /**
+   * `merge-default` preserves the historical MetaMCP behavior. `exact` passes
+   * only `env`, without adding any inherited variables.
+   */
+  envMode?: "merge-default" | "exact";
+
+  /**
    * How to handle stderr of the child process. This matches the semantics of Node's `child_process.spawn`.
    *
    * The default is "inherit", meaning messages to stderr will be printed to the parent process's stderr.
@@ -41,7 +47,20 @@ export type StdioServerParameters = {
    * If not specified, the current working directory will be inherited.
    */
   cwd?: string;
+
+  /** Disable generic process logs when the caller supplies redacted logs. */
+  lifecycleLogging?: boolean;
+
+  /** Grace period before close escalates from SIGTERM to SIGKILL. */
+  terminationGracePeriodMs?: number;
 };
+
+export interface StdioProcessLifecycleEvent {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  error?: Error;
+  closeRequested: boolean;
+}
 
 /**
  * Environment variables to inherit by default, if an environment is not explicitly given.
@@ -120,11 +139,20 @@ export function getDefaultEnvironment(): Record<string, string> {
  */
 export class ProcessManagedStdioTransport implements Transport {
   private _process?: ChildProcess;
-  private _abortController: AbortController = new AbortController();
   private _readBuffer: ReadBuffer = new ReadBuffer();
   private _serverParams: StdioServerParameters;
   private _stderrStream: PassThrough | null = null;
   private _isCleanup: boolean = false;
+  private _startAttempted: boolean = false;
+  private _spawnError?: Error;
+  private _nativeClosePromise?: Promise<void>;
+  private _resolveNativeClose?: () => void;
+  private _lifecyclePromise?: Promise<void>;
+  private _resolveLifecycle?: () => void;
+  private _closePromise?: Promise<void>;
+  private _internalLifecycleListeners = new Set<
+    (event: StdioProcessLifecycleEvent) => void | Promise<void>
+  >();
 
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -133,9 +161,26 @@ export class ProcessManagedStdioTransport implements Transport {
 
   constructor(server: StdioServerParameters) {
     this._serverParams = server;
+    this.resetClosePromises();
     if (server.stderr === "pipe" || server.stderr === "overlapped") {
       this._stderrStream = new PassThrough();
     }
+  }
+
+  private resetClosePromises() {
+    this._nativeClosePromise = new Promise((resolve) => {
+      this._resolveNativeClose = resolve;
+    });
+    this._lifecyclePromise = new Promise((resolve) => {
+      this._resolveLifecycle = resolve;
+    });
+  }
+
+  addInternalLifecycleListener(
+    listener: (event: StdioProcessLifecycleEvent) => void | Promise<void>,
+  ): () => void {
+    this._internalLifecycleListeners.add(listener);
+    return () => this._internalLifecycleListeners.delete(listener);
   }
 
   /**
@@ -147,20 +192,25 @@ export class ProcessManagedStdioTransport implements Transport {
         "StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.",
       );
     }
+    this._startAttempted = true;
 
     return new Promise((resolve, reject) => {
+      const env =
+        this._serverParams.envMode === "exact"
+          ? { ...(this._serverParams.env ?? {}) }
+          : {
+              // Preserve the existing default behavior for normal MetaMCP servers.
+              ...getDefaultEnvironment(),
+              ...this._serverParams.env,
+            };
+
       this._process = spawn(
         this._serverParams.command,
         this._serverParams.args ?? [],
         {
-          // merge default env with server env because mcp server needs some env vars
-          env: {
-            ...getDefaultEnvironment(),
-            ...this._serverParams.env,
-          },
+          env,
           stdio: ["pipe", "pipe", this._serverParams.stderr ?? "inherit"],
           shell: false,
-          signal: this._abortController.signal,
           windowsHide: process.platform === "win32" && isElectron(),
           cwd: this._serverParams.cwd,
           detached: true,
@@ -171,9 +221,8 @@ export class ProcessManagedStdioTransport implements Transport {
       this._process.unref();
 
       this._process.on("error", (error) => {
+        this._spawnError = error;
         if (error.name === "AbortError") {
-          // Expected when close() is called.
-          this.onclose?.();
           return;
         }
 
@@ -182,24 +231,49 @@ export class ProcessManagedStdioTransport implements Transport {
       });
 
       this._process.on("spawn", () => {
-        logger.info(
-          `[transport.start] spawned PID ${this._process?.pid} — command: ${this._serverParams.command}`,
-        );
+        if (this._serverParams.lifecycleLogging !== false) {
+          logger.info(`[transport.start] spawned PID ${this._process?.pid}`);
+        }
         resolve();
       });
 
       this._process.on("close", (code, signal) => {
+        const lifecycleEvent: StdioProcessLifecycleEvent = {
+          closeRequested: this._isCleanup,
+          code,
+          error: this._spawnError,
+          signal: signal as NodeJS.Signals | null,
+        };
+        this._resolveNativeClose?.();
+
         // Only emit crash event if this wasn't a clean shutdown
         if (!this._isCleanup && (code !== 0 || signal)) {
-          logger.warn(`Process crashed with code: ${code}, signal: ${signal}`);
-          logger.info(
-            `Calling onprocesscrash handler: ${this.onprocesscrash ? "handler exists" : "no handler"}`,
-          );
-          this.onprocesscrash?.(code, signal);
+          if (this._serverParams.lifecycleLogging !== false) {
+            logger.warn(
+              `Process crashed with code: ${code}, signal: ${signal}`,
+            );
+          }
+          try {
+            this.onprocesscrash?.(code, signal);
+          } catch (error) {
+            if (this._serverParams.lifecycleLogging !== false) {
+              logger.error("Process crash handler failed:", error);
+            }
+          }
         }
 
         this._process = undefined;
-        this.onclose?.();
+        void Promise.allSettled(
+          [...this._internalLifecycleListeners].map(async (listener) => {
+            await listener(lifecycleEvent);
+          }),
+        ).then(() => {
+          try {
+            this.onclose?.();
+          } finally {
+            this._resolveLifecycle?.();
+          }
+        });
       });
 
       this._process.stdin?.on("error", (error) => {
@@ -245,6 +319,11 @@ export class ProcessManagedStdioTransport implements Transport {
     return this._process?.pid ?? null;
   }
 
+  /** Wait until the child has emitted close and internal lifecycle hooks finish. */
+  async waitForClose(): Promise<void> {
+    await this._lifecyclePromise;
+  }
+
   private processReadBuffer() {
     while (true) {
       try {
@@ -260,7 +339,12 @@ export class ProcessManagedStdioTransport implements Transport {
     }
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this._closePromise ??= this.performClose();
+    return this._closePromise;
+  }
+
+  private async performClose(): Promise<void> {
     this._isCleanup = true;
 
     const proc = this._process;
@@ -269,43 +353,63 @@ export class ProcessManagedStdioTransport implements Transport {
     if (pid && proc) {
       // Register the "close" listener BEFORE sending any signal so a fast-exiting
       // child cannot emit "close" in between and cause the promise to time out.
-      const exitedPromise = new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => resolve(false), 5000);
-        proc.once("close", () => {
-          clearTimeout(timeout);
-          resolve(true);
-        });
-      });
+      this.signalProcess(proc, pid, "SIGTERM");
 
-      this._abortController.abort();
+      // Wait up to 5 seconds for graceful shutdown, then escalate to SIGKILL
+      let timeout: NodeJS.Timeout | undefined;
+      const exited = await Promise.race([
+        this._nativeClosePromise?.then(() => true) ?? Promise.resolve(true),
+        new Promise<false>((resolve) => {
+          timeout = setTimeout(
+            () => resolve(false),
+            this._serverParams.terminationGracePeriodMs ?? 5000,
+          );
+        }),
+      ]);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
 
-      try {
-        process.kill(-pid, "SIGTERM");
-        logger.info(`[transport.close] SIGTERM sent to process group -${pid}`);
-      } catch (error) {
+      if (!exited) {
+        this.signalProcess(proc, pid, "SIGKILL");
+      }
+
+      // SIGKILL is not considered complete until Node reports child close/reap.
+      await this._nativeClosePromise;
+    } else if (proc) {
+      // Spawn errors such as ENOENT have no PID, but still emit close after error.
+      await this._nativeClosePromise;
+    } else if (!this._startAttempted) {
+      this._resolveNativeClose?.();
+      this._resolveLifecycle?.();
+    }
+
+    await this._lifecyclePromise;
+    this._readBuffer.clear();
+  }
+
+  private signalProcess(
+    proc: ChildProcess,
+    pid: number,
+    signal: NodeJS.Signals,
+  ) {
+    try {
+      if (process.platform === "win32") {
+        proc.kill(signal);
+      } else {
+        process.kill(-pid, signal);
+      }
+      if (this._serverParams.lifecycleLogging !== false) {
+        logger.info(`[transport.close] ${signal} sent to process ${pid}`);
+      }
+    } catch (error) {
+      if (this._serverParams.lifecycleLogging !== false) {
         logger.warn(
-          `[transport.close] SIGTERM failed for process group -${pid}:`,
+          `[transport.close] ${signal} failed for process ${pid}:`,
           error,
         );
       }
-
-      // Wait up to 5 seconds for graceful shutdown, then escalate to SIGKILL
-      const exited = await exitedPromise;
-
-      if (!exited) {
-        logger.warn(
-          `[transport.close] Process ${pid} still alive after 5s — sending SIGKILL`,
-        );
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch {
-          // Process may have already exited between the timeout check and the kill
-        }
-      }
     }
-
-    this._process = undefined;
-    this._readBuffer.clear();
   }
 
   send(message: JSONRPCMessage): Promise<void> {

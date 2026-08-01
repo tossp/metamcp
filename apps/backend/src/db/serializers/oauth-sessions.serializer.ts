@@ -1,15 +1,5 @@
 import { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { UpstreamTokenResponse } from "@repo/zod-types";
-
-type DatabaseOAuthSession = {
-  uuid: string;
-  mcp_server_uuid: string;
-  client_information: OAuthClientInformation | null;
-  tokens: UpstreamTokenResponse | null;
-  code_verifier: string | null;
-  created_at: Date;
-  updated_at: Date;
-};
+import { DatabaseOAuthSession, UpstreamTokenResponse } from "@repo/zod-types";
 
 type SerializedOAuthSession = {
   uuid: string;

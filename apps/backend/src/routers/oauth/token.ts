@@ -4,33 +4,32 @@ import logger from "@/utils/logger";
 
 import { oauthRepository } from "../../db/repositories";
 import {
-  generateSecureAccessToken,
-  generateSecureRefreshToken,
-  rateLimitToken,
-} from "./utils";
+  authenticateTokenClient,
+  type ClientAuthenticationResult,
+} from "./client-auth";
+import {
+  ACCESS_TOKEN_EXPIRY,
+  isValidPkceVerifier,
+  pkceChallengeFromVerifier,
+  prepareTokenPair,
+} from "./token-service";
+import { rateLimitToken } from "./utils";
 
 const tokenRouter = express.Router();
+const CLIENT_AUTHENTICATION_CHALLENGE = 'Basic realm="oauth", charset="UTF-8"';
 
-const ACCESS_TOKEN_EXPIRY = 3600; // 1 hour
-const REFRESH_TOKEN_EXPIRY = 7 * 24 * 3600; // 7 days
+function sendClientAuthenticationFailure(
+  res: express.Response,
+  result: Extract<ClientAuthenticationResult, { ok: false }>,
+) {
+  if (result.status === 401 && result.error === "invalid_client") {
+    res.setHeader("WWW-Authenticate", CLIENT_AUTHENTICATION_CHALLENGE);
+  }
 
-/**
- * Issue a new access token + refresh token pair and store them.
- */
-async function issueTokenPair(clientId: string, userId: string, scope: string) {
-  const accessToken = generateSecureAccessToken();
-  const refreshToken = generateSecureRefreshToken();
-
-  await oauthRepository.setAccessToken(accessToken, {
-    client_id: clientId,
-    user_id: userId,
-    scope,
-    expires_at: Date.now() + ACCESS_TOKEN_EXPIRY * 1000,
-    refresh_token: refreshToken,
-    refresh_token_expires_at: Date.now() + REFRESH_TOKEN_EXPIRY * 1000,
+  return res.status(result.status).json({
+    error: result.error,
+    error_description: result.error_description,
   });
-
-  return { accessToken, refreshToken };
 }
 
 /**
@@ -43,7 +42,6 @@ tokenRouter.post("/oauth/token", rateLimitToken, async (req, res) => {
     // Check if body was parsed correctly
     if (!req.body || typeof req.body !== "object") {
       logger.error("Token endpoint: req.body is undefined or invalid", {
-        body: req.body,
         bodyType: typeof req.body,
         contentType: req.headers["content-type"],
         method: req.method,
@@ -82,22 +80,60 @@ tokenRouter.post("/oauth/token", rateLimitToken, async (req, res) => {
 /**
  * Handle grant_type=authorization_code
  */
-async function handleAuthorizationCodeGrant(
+export async function handleAuthorizationCodeGrant(
   req: express.Request,
   res: express.Response,
 ) {
-  const { code, redirect_uri, client_id, code_verifier } = req.body;
+  const { code, redirect_uri, code_verifier } = req.body;
 
   // Validate authorization code
-  if (!code) {
+  if (typeof code !== "string" || !code) {
     return res.status(400).json({
       error: "invalid_request",
       error_description: "Missing authorization code",
     });
   }
 
-  // Look up the authorization code
-  const codeData = await oauthRepository.getAuthCode(code);
+  if (!redirect_uri || typeof redirect_uri !== "string") {
+    return res.status(400).json({
+      error: "invalid_request",
+      error_description: "Missing redirect_uri parameter",
+    });
+  }
+
+  if (code_verifier === undefined) {
+    return res.status(400).json({
+      error: "invalid_request",
+      error_description: "PKCE code verifier is required",
+    });
+  }
+
+  const clientAuthentication = await authenticateTokenClient(
+    req,
+    oauthRepository,
+  );
+  if (!clientAuthentication.ok) {
+    return sendClientAuthenticationFailure(res, clientAuthentication);
+  }
+
+  if (!isValidPkceVerifier(code_verifier)) {
+    return res.status(400).json({
+      error: "invalid_grant",
+      error_description: "Invalid authorization code or PKCE verifier",
+    });
+  }
+
+  const pair = prepareTokenPair();
+  const codeData = await oauthRepository.consumeAuthorizationCode(
+    {
+      code,
+      client_id: clientAuthentication.client.client_id,
+      redirect_uri,
+      code_challenge: pkceChallengeFromVerifier(code_verifier),
+    },
+    pair.persistence,
+  );
+
   if (!codeData) {
     return res.status(400).json({
       error: "invalid_grant",
@@ -105,129 +141,11 @@ async function handleAuthorizationCodeGrant(
     });
   }
 
-  // Check if code has expired (10 minutes)
-  if (Date.now() > codeData.expires_at.getTime()) {
-    await oauthRepository.deleteAuthCode(code);
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description: "Authorization code has expired",
-    });
-  }
-
-  // Validate client_id and redirect_uri match the original request
-  if (codeData.client_id !== client_id) {
-    return res.status(400).json({
-      error: "invalid_client",
-      error_description: "Client ID does not match",
-    });
-  }
-
-  if (codeData.redirect_uri !== redirect_uri) {
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description: "Redirect URI does not match",
-    });
-  }
-
-  // Validate client_id against registered clients
-  const clientData = await oauthRepository.getClient(client_id);
-  if (!clientData) {
-    return res.status(400).json({
-      error: "invalid_client",
-      error_description: "Client not found or not registered",
-    });
-  }
-
-  // Validate client authentication based on registered auth method
-  if (clientData.token_endpoint_auth_method === "client_secret_basic") {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Basic ")) {
-      return res.status(401).json({
-        error: "invalid_client",
-        error_description: "Client authentication required via Basic auth",
-      });
-    }
-
-    const credentials = Buffer.from(
-      authHeader.substring(6),
-      "base64",
-    ).toString();
-    const [authClientId, authClientSecret] = credentials.split(":");
-
-    if (
-      authClientId !== client_id ||
-      authClientSecret !== clientData.client_secret
-    ) {
-      return res.status(401).json({
-        error: "invalid_client",
-        error_description: "Invalid client credentials",
-      });
-    }
-  } else if (clientData.token_endpoint_auth_method === "client_secret_post") {
-    const { client_secret } = req.body;
-    if (!client_secret || client_secret !== clientData.client_secret) {
-      return res.status(401).json({
-        error: "invalid_client",
-        error_description: "Invalid client secret",
-      });
-    }
-  }
-  // For "none" auth method, no additional validation needed
-
-  // OAuth 2.1 Security: PKCE is mandatory for all clients
-  if (!codeData.code_challenge) {
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description:
-        "Authorization code was not issued with PKCE challenge",
-    });
-  }
-
-  if (!code_verifier) {
-    return res.status(400).json({
-      error: "invalid_request",
-      error_description: "PKCE code verifier is required",
-    });
-  }
-
-  // Verify code challenge
-  const crypto = await import("crypto");
-  let challengeFromVerifier: string;
-
-  if (codeData.code_challenge_method === "S256") {
-    const hash = crypto.createHash("sha256").update(code_verifier).digest();
-    challengeFromVerifier = hash.toString("base64url");
-  } else if (codeData.code_challenge_method === "plain") {
-    challengeFromVerifier = code_verifier;
-  } else {
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description: "Unsupported code challenge method",
-    });
-  }
-
-  if (challengeFromVerifier !== codeData.code_challenge) {
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description: "PKCE verification failed",
-    });
-  }
-
-  // Code is valid, delete it (authorization codes are single-use)
-  await oauthRepository.deleteAuthCode(code);
-
-  // Issue access token + refresh token
-  const { accessToken, refreshToken } = await issueTokenPair(
-    codeData.client_id,
-    codeData.user_id,
-    codeData.scope,
-  );
-
-  res.json({
-    access_token: accessToken,
+  return res.json({
+    access_token: pair.accessToken,
     token_type: "Bearer",
     expires_in: ACCESS_TOKEN_EXPIRY,
-    refresh_token: refreshToken,
+    refresh_token: pair.refreshToken,
     scope: codeData.scope,
   });
 }
@@ -236,63 +154,46 @@ async function handleAuthorizationCodeGrant(
  * Handle grant_type=refresh_token
  * Issues a new access token + refresh token pair (token rotation).
  */
-async function handleRefreshTokenGrant(
+export async function handleRefreshTokenGrant(
   req: express.Request,
   res: express.Response,
 ) {
-  const { refresh_token, client_id } = req.body;
+  const { refresh_token } = req.body;
 
-  if (!refresh_token) {
+  if (typeof refresh_token !== "string" || !refresh_token) {
     return res.status(400).json({
       error: "invalid_request",
       error_description: "Missing refresh_token parameter",
     });
   }
 
-  // Look up the token row by refresh_token
-  const tokenData = await oauthRepository.getByRefreshToken(refresh_token);
+  const clientAuthentication = await authenticateTokenClient(
+    req,
+    oauthRepository,
+  );
+  if (!clientAuthentication.ok) {
+    return sendClientAuthenticationFailure(res, clientAuthentication);
+  }
+
+  const pair = prepareTokenPair();
+  const tokenData = await oauthRepository.rotateRefreshToken(
+    refresh_token,
+    clientAuthentication.client.client_id,
+    pair.persistence,
+  );
+
   if (!tokenData) {
     return res.status(400).json({
       error: "invalid_grant",
-      error_description: "Invalid refresh token",
+      error_description: "Invalid or expired refresh token",
     });
   }
 
-  // Check refresh token expiry
-  if (
-    tokenData.refresh_token_expires_at &&
-    Date.now() > tokenData.refresh_token_expires_at.getTime()
-  ) {
-    await oauthRepository.deleteAccessToken(tokenData.access_token);
-    return res.status(400).json({
-      error: "invalid_grant",
-      error_description: "Refresh token has expired",
-    });
-  }
-
-  // Validate client_id matches (if provided)
-  if (client_id && tokenData.client_id !== client_id) {
-    return res.status(400).json({
-      error: "invalid_client",
-      error_description: "Client ID does not match",
-    });
-  }
-
-  // Delete old token row (rotation: old refresh token is single-use)
-  await oauthRepository.deleteAccessToken(tokenData.access_token);
-
-  // Issue new access token + refresh token
-  const { accessToken, refreshToken } = await issueTokenPair(
-    tokenData.client_id,
-    tokenData.user_id,
-    tokenData.scope,
-  );
-
-  res.json({
-    access_token: accessToken,
+  return res.json({
+    access_token: pair.accessToken,
     token_type: "Bearer",
     expires_in: ACCESS_TOKEN_EXPIRY,
-    refresh_token: refreshToken,
+    refresh_token: pair.refreshToken,
     scope: tokenData.scope,
   });
 }

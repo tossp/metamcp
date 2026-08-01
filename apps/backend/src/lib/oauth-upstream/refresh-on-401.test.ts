@@ -22,6 +22,7 @@ describe("tryRefreshUpstreamTokens", () => {
     uuid: "00000000-0000-0000-0000-0000000000aa",
     name: "test-server",
     url: "https://api.example.com/mcp",
+    user_id: "user-1",
   };
 
   const loadModule = async () => {
@@ -77,13 +78,20 @@ describe("tryRefreshUpstreamTokens", () => {
     expect(result.tokens?.access_token).toBe("NEW");
     // Refresh token preserved per RFC 6749 §6.
     expect(result.tokens?.refresh_token).toBe("RT_old");
-    expect(upsert).toHaveBeenCalledWith({
-      mcp_server_uuid: SERVER.uuid,
-      tokens: expect.objectContaining({
-        access_token: "NEW",
-        refresh_token: "RT_old",
-      }),
-    });
+    expect(findByMcpServerUuid).toHaveBeenCalledWith(
+      SERVER.uuid,
+      SERVER.user_id,
+    );
+    expect(upsert).toHaveBeenCalledWith(
+      {
+        mcp_server_uuid: SERVER.uuid,
+        tokens: expect.objectContaining({
+          access_token: "NEW",
+          refresh_token: "RT_old",
+        }),
+      },
+      SERVER.user_id,
+    );
   });
 
   it("returns no_session when no oauth_sessions row exists", async () => {

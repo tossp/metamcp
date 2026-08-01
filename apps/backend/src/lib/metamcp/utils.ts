@@ -87,9 +87,12 @@ export async function convertDbServerToParams(
 ): Promise<ServerParameters | null> {
   try {
     // Fetch OAuth tokens from OAuth sessions table
-    const oauthSession = await oauthSessionsRepository.findByMcpServerUuid(
-      server.uuid,
-    );
+    const oauthSession = server.user_id
+      ? await oauthSessionsRepository.findByMcpServerUuid(
+          server.uuid,
+          server.user_id,
+        )
+      : undefined;
     let oauthTokens = null;
 
     if (oauthSession && oauthSession.tokens) {
@@ -118,6 +121,7 @@ export async function convertDbServerToParams(
       bearerToken: server.bearerToken,
       headers: server.headers || {},
       forward_headers: server.forward_headers || {},
+      user_id: server.user_id,
     };
 
     // Process based on server type

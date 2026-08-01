@@ -7,6 +7,7 @@ import { oauthRepository } from "../../db/repositories";
 import {
   generateSecureAuthCode,
   getBaseUrl,
+  hasValidS256Pkce,
   type OAuthParams,
   rateLimitAuth,
   validateRedirectUri,
@@ -55,21 +56,12 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
       });
     }
 
-    // OAuth 2.1 Security: Enforce PKCE for all clients
-    if (!code_challenge || !code_challenge_method) {
+    // OAuth 2.1 Security: Enforce S256 PKCE for all clients.
+    if (!hasValidS256Pkce(code_challenge, code_challenge_method)) {
       return res.status(400).json({
         error: "invalid_request",
         error_description:
-          "PKCE parameters (code_challenge and code_challenge_method) are required per OAuth 2.1",
-      });
-    }
-
-    // Validate PKCE method (OAuth 2.1 recommends S256)
-    if (code_challenge_method !== "S256" && code_challenge_method !== "plain") {
-      return res.status(400).json({
-        error: "invalid_request",
-        error_description:
-          "Unsupported code_challenge_method. Supported: S256, plain",
+          "A valid S256 PKCE code_challenge and explicit code_challenge_method=S256 are required",
       });
     }
 
@@ -112,10 +104,8 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
       redirect_uri: redirect_uri as string,
       scope: scope ? (scope as string) : "admin",
       state: state ? (state as string) : undefined,
-      code_challenge: code_challenge ? (code_challenge as string) : undefined,
-      code_challenge_method: code_challenge_method
-        ? (code_challenge_method as string)
-        : undefined,
+      code_challenge,
+      code_challenge_method: "S256",
     };
 
     logger.info(
@@ -154,8 +144,8 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
               redirect_uri: oauthParams.redirect_uri,
               scope: oauthParams.scope || "admin",
               user_id: sessionData.user.id,
-              code_challenge: oauthParams.code_challenge || null,
-              code_challenge_method: oauthParams.code_challenge_method || null,
+              code_challenge: oauthParams.code_challenge,
+              code_challenge_method: oauthParams.code_challenge_method,
               expires_at: Date.now() + 10 * 60 * 1000, // 10 minutes
             });
 
@@ -284,6 +274,18 @@ Content-Type: application/json
 
     const { client_id, redirect_uri, state } = oauthParams;
 
+    if (
+      !hasValidS256Pkce(
+        oauthParams.code_challenge,
+        oauthParams.code_challenge_method,
+      )
+    ) {
+      return res.status(400).json({
+        error: "invalid_request",
+        error_description: "Invalid S256 PKCE authorization parameters",
+      });
+    }
+
     // Verify user authentication by checking session cookies
     if (!req.headers.cookie) {
       // Redirect back to login if no authentication
@@ -334,8 +336,8 @@ Content-Type: application/json
       redirect_uri,
       scope: oauthParams.scope || "admin",
       user_id: sessionData.user.id,
-      code_challenge: oauthParams.code_challenge || null,
-      code_challenge_method: oauthParams.code_challenge_method || null,
+      code_challenge: oauthParams.code_challenge,
+      code_challenge_method: oauthParams.code_challenge_method,
       expires_at: Date.now() + 10 * 60 * 1000, // 10 minutes
     });
 

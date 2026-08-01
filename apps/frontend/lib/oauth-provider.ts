@@ -10,6 +10,7 @@ import {
 
 import { getServerSpecificKey, SESSION_KEYS } from "./constants";
 import { getAppUrl } from "./env";
+import { requireOAuthPersistence } from "./oauth-persistence";
 import { vanillaTrpcClient } from "./trpc";
 
 // base64url (RFC 4648 §5) encoding of a byte array. Uses btoa for the
@@ -207,24 +208,17 @@ class DbOAuthClientProvider implements OAuthClientProvider {
     crypto.getRandomValues(bytes);
     const stateValue = base64UrlEncode(bytes);
 
-    if (await this.serverExists()) {
-      try {
-        await vanillaTrpcClient.frontend.oauth.upsert.mutate({
+    if (!(await this.serverExists())) {
+      throw new Error("MCP server must exist before persisting OAuth state");
+    }
+    await requireOAuthPersistence(
+      () =>
+        vanillaTrpcClient.frontend.oauth.upsert.mutate({
           mcp_server_uuid: this.mcpServerUuid,
           expected_state: stateValue,
-        });
-      } catch (error) {
-        // Best-effort. If the upsert fails the upstream redirect still
-        // carries `stateValue`, but server-side validation will fall
-        // through the back-compat NULL branch — the CSRF check degrades
-        // to "skipped" rather than rejecting the flow. That is fail-open
-        // for CSRF specifically; PKCE plus `resolveOwnedServerUrl`'s
-        // ownership/SSRF guard still cover the practical attack surface.
-        // Logged so monitoring can alert on a sustained persistence
-        // failure, which would indicate the CSRF layer is silently off.
-        console.error("Error persisting expected_state to database:", error);
-      }
-    }
+        }),
+      "Failed to persist OAuth state",
+    );
 
     return stateValue;
   }
@@ -239,16 +233,19 @@ class DbOAuthClientProvider implements OAuthClientProvider {
     sessionStorage.setItem(key, codeVerifier);
 
     // If server exists, also save to database
-    if (await this.serverExists()) {
-      try {
-        await vanillaTrpcClient.frontend.oauth.upsert.mutate({
+    if (!(await this.serverExists())) {
+      throw new Error(
+        "MCP server must exist before persisting the OAuth code verifier",
+      );
+    }
+    await requireOAuthPersistence(
+      () =>
+        vanillaTrpcClient.frontend.oauth.upsert.mutate({
           mcp_server_uuid: this.mcpServerUuid,
           code_verifier: codeVerifier,
-        });
-      } catch (error) {
-        console.error("Error saving code verifier to database:", error);
-      }
-    }
+        }),
+      "Failed to persist OAuth code verifier",
+    );
   }
 
   async codeVerifier() {

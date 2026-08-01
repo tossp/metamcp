@@ -22,6 +22,10 @@ export const ServerParametersSchema = z.object({
   bearerToken: z.string().nullable().optional(),
   headers: z.record(z.string(), z.string()).nullable().optional(),
   forward_headers: z.record(z.string(), z.string()).optional(),
+  // Internal ownership context used to scope persisted OAuth credentials.
+  // Public/synthetic servers leave this null/undefined and cannot load an
+  // oauth_sessions row.
+  user_id: z.string().nullable().optional(),
 });
 
 export type ServerParameters = z.infer<typeof ServerParametersSchema>;

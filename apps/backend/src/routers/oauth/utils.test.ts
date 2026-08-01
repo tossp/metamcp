@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { validateRedirectUri } from "./utils";
+import { hasValidS256Pkce, validateRedirectUri } from "./utils";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -68,5 +68,23 @@ describe("validateRedirectUri", () => {
     expect(validateRedirectUri("http://192.168.1.10:49152/callback")).toBe(
       true,
     );
+  });
+});
+
+describe("hasValidS256Pkce", () => {
+  const challenge = "A".repeat(43);
+
+  it("accepts an explicit S256 method with a valid base64url challenge", () => {
+    expect(hasValidS256Pkce(challenge, "S256")).toBe(true);
+  });
+
+  it.each([
+    [undefined, undefined],
+    [challenge, undefined],
+    [challenge, "plain"],
+    ["short", "S256"],
+    [`${"A".repeat(42)}=`, "S256"],
+  ])("rejects missing, plain, or malformed PKCE: %s / %s", (value, method) => {
+    expect(hasValidS256Pkce(value, method)).toBe(false);
   });
 });

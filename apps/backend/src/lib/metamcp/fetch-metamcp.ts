@@ -55,6 +55,7 @@ export async function getMcpServers(
         bearerToken: mcpServersTable.bearerToken,
         headers: mcpServersTable.headers,
         forward_headers: mcpServersTable.forward_headers,
+        user_id: mcpServersTable.user_id,
         status: namespaceServerMappingsTable.status,
         error_status: mcpServersTable.error_status,
       })
@@ -68,9 +69,12 @@ export async function getMcpServers(
     const serverDict: Record<string, ServerParameters> = {};
     for (const server of servers) {
       // Fetch OAuth tokens from OAuth sessions table
-      const oauthSession = await oauthSessionsRepository.findByMcpServerUuid(
-        server.uuid,
-      );
+      const oauthSession = server.user_id
+        ? await oauthSessionsRepository.findByMcpServerUuid(
+            server.uuid,
+            server.user_id,
+          )
+        : undefined;
       let oauthTokens = null;
 
       if (oauthSession && oauthSession.tokens) {
@@ -101,6 +105,7 @@ export async function getMcpServers(
         stderr: "inherit" as IOType,
         oauth_tokens: oauthTokens,
         bearerToken: server.bearerToken,
+        user_id: server.user_id,
       };
 
       // Process based on server type

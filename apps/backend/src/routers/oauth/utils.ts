@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "crypto";
+import { randomBytes } from "crypto";
 import express from "express";
 
 import logger from "@/utils/logger";
@@ -9,8 +9,21 @@ export interface OAuthParams {
   redirect_uri: string;
   scope?: string;
   state?: string;
-  code_challenge?: string;
-  code_challenge_method?: string;
+  code_challenge: string;
+  code_challenge_method: "S256";
+}
+
+export function isValidS256CodeChallenge(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+export function hasValidS256Pkce(
+  codeChallenge: unknown,
+  codeChallengeMethod: unknown,
+): codeChallenge is string {
+  return (
+    codeChallengeMethod === "S256" && isValidS256CodeChallenge(codeChallenge)
+  );
 }
 
 /**
@@ -111,33 +124,6 @@ export function validateRedirectUri(
   } catch {
     return false;
   }
-}
-
-/**
- * Hash client secret for secure storage
- * Uses SHA-256 with salt
- */
-export function hashClientSecret(
-  secret: string,
-  salt?: string,
-): { hash: string; salt: string } {
-  const saltToUse = salt || randomBytes(16).toString("hex");
-  const hash = createHash("sha256")
-    .update(secret + saltToUse)
-    .digest("hex");
-  return { hash, salt: saltToUse };
-}
-
-/**
- * Verify client secret against stored hash
- */
-export function verifyClientSecret(
-  secret: string,
-  storedHash: string,
-  salt: string,
-): boolean {
-  const { hash } = hashClientSecret(secret, salt);
-  return hash === storedHash;
 }
 
 /**
@@ -260,7 +246,7 @@ class RateLimiter {
 
 // Create rate limiter instances
 const authEndpointLimiter = new RateLimiter(20, 1 * 60 * 1000); // 20 attempts per 1 minute
-const tokenEndpointLimiter = new RateLimiter(20, 1 * 60 * 1000); // 10 attempts per 1 minute
+const tokenEndpointLimiter = new RateLimiter(20, 1 * 60 * 1000); // 20 attempts per 1 minute
 
 // Clean up rate limiter entries every 10 minutes
 setInterval(

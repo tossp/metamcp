@@ -73,8 +73,8 @@ export const OAuthAuthorizationCodeSchema = z.object({
   redirect_uri: z.string(),
   scope: z.string(),
   user_id: z.string(),
-  code_challenge: z.string().nullable(),
-  code_challenge_method: z.string().nullable(),
+  code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  code_challenge_method: z.literal("S256"),
   expires_at: z.date(),
   created_at: z.date(),
 });
@@ -117,8 +117,8 @@ export const OAuthAuthorizationCodeCreateInputSchema = z.object({
   redirect_uri: z.string(),
   scope: z.string(),
   user_id: z.string(),
-  code_challenge: z.string().nullable().optional(),
-  code_challenge_method: z.string().nullable().optional(),
+  code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  code_challenge_method: z.literal("S256"),
   expires_at: z.number(), // timestamp
 });
 
@@ -172,7 +172,7 @@ export const UpsertOAuthSessionRequestSchema = z.object({
   client_information: OAuthClientInformationSchema.optional(),
   tokens: OAuthTokensSchema.optional(),
   code_verifier: z.string().optional(),
-  expected_state: z.string().optional(),
+  expected_state: z.string().min(1).optional(),
 });
 
 // Upsert OAuth Session Response
@@ -264,7 +264,7 @@ export const OAuthSessionCreateInputSchema = z.object({
   client_information: OAuthClientInformationSchema.optional(),
   tokens: UpstreamTokenResponseSchema.nullable().optional(),
   code_verifier: z.string().nullable().optional(),
-  expected_state: z.string().optional(),
+  expected_state: z.string().min(1).optional(),
 });
 
 export const OAuthSessionUpdateInputSchema = z.object({
@@ -272,7 +272,7 @@ export const OAuthSessionUpdateInputSchema = z.object({
   client_information: OAuthClientInformationSchema.optional(),
   tokens: UpstreamTokenResponseSchema.nullable().optional(),
   code_verifier: z.string().nullable().optional(),
-  expected_state: z.string().optional(),
+  expected_state: z.string().min(1).optional(),
 });
 
 // Export repository types
@@ -287,6 +287,7 @@ export type OAuthSessionUpdateInput = z.infer<
 export const DatabaseOAuthSessionSchema = z.object({
   uuid: z.string(),
   mcp_server_uuid: z.string(),
+  owner_user_id: z.string(),
   client_information: OAuthClientInformationSchema.nullable(),
   tokens: UpstreamTokenResponseSchema.nullable(),
   code_verifier: z.string().nullable(),
@@ -294,6 +295,7 @@ export const DatabaseOAuthSessionSchema = z.object({
   // this column was added, and rows where the exchange already cleared
   // the value, both carry NULL. NEVER serialized to the frontend.
   expected_state: z.string().nullable(),
+  expected_state_expires_at: z.date().nullable(),
   created_at: z.date(),
   updated_at: z.date(),
 });

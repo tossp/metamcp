@@ -58,6 +58,7 @@ export function resolveRedirectUri(): string {
 // optional `oauth_client_info` block.
 export async function persistPreRegisteredOAuthClient(
   mcpServerUuid: string,
+  actorUserId: string,
   oauth: OAuthClientInfoRequest,
   repo: OAuthSessionsRepository,
 ): Promise<void> {
@@ -70,18 +71,19 @@ export async function persistPreRegisteredOAuthClient(
   // Drop any pre-registered session so the SDK falls back to dynamic
   // registration on the next authorize attempt.
   if (!clientInfo) {
-    const existing = await repo.findByMcpServerUuid(mcpServerUuid);
-    if (existing) {
-      await repo.deleteByMcpServerUuid(mcpServerUuid);
-    }
+    await repo.deleteByMcpServerUuid(mcpServerUuid, actorUserId);
     return;
   }
 
-  await repo.upsert({
-    mcp_server_uuid: mcpServerUuid,
-    // The repo type narrows `client_information` to the MCP SDK's 4-field
-    // OAuthClientInformation. The underlying jsonb column accepts the full
-    // RFC 7591 shape we want to round-trip, so we widen via an explicit cast.
-    client_information: clientInfo as unknown as OAuthClientInformation,
-  });
+  const persisted = await repo.upsert(
+    {
+      mcp_server_uuid: mcpServerUuid,
+      // The repo type narrows `client_information` to the MCP SDK's 4-field
+      // OAuthClientInformation. The underlying jsonb column accepts the full
+      // RFC 7591 shape we want to round-trip, so we widen via an explicit cast.
+      client_information: clientInfo as unknown as OAuthClientInformation,
+    },
+    actorUserId,
+  );
+  if (!persisted) throw new Error("OAuth resource is unavailable");
 }

@@ -8,6 +8,7 @@ import {
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -16,6 +17,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -105,6 +107,9 @@ export const oauthSessionsTable = pgTable(
     mcp_server_uuid: uuid("mcp_server_uuid")
       .notNull()
       .references(() => mcpServersTable.uuid, { onDelete: "cascade" }),
+    owner_user_id: text("owner_user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
     client_information: jsonb("client_information")
       .$type<OAuthClientInformation>()
       .notNull()
@@ -122,6 +127,9 @@ export const oauthSessionsTable = pgTable(
     // on success (one-shot). NEVER returned to the frontend — the
     // serializer strips it.
     expected_state: text("expected_state"),
+    expected_state_expires_at: timestamp("expected_state_expires_at", {
+      withTimezone: true,
+    }),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -131,7 +139,15 @@ export const oauthSessionsTable = pgTable(
   },
   (table) => [
     index("oauth_sessions_mcp_server_uuid_idx").on(table.mcp_server_uuid),
+    index("oauth_sessions_owner_user_id_idx").on(table.owner_user_id),
     unique("oauth_sessions_unique_per_server_idx").on(table.mcp_server_uuid),
+    check(
+      "oauth_sessions_expected_state_expiry_check",
+      sql`(
+      (expected_state IS NULL AND expected_state_expires_at IS NULL) OR
+      (expected_state IS NOT NULL AND expected_state_expires_at IS NOT NULL)
+    )`,
+    ),
   ],
 );
 
@@ -554,8 +570,10 @@ export const oauthAuthorizationCodesTable = pgTable(
     user_id: text("user_id")
       .notNull()
       .references(() => usersTable.id, { onDelete: "cascade" }),
-    code_challenge: text("code_challenge"),
-    code_challenge_method: text("code_challenge_method"),
+    code_challenge: text("code_challenge").notNull(),
+    code_challenge_method: text("code_challenge_method", {
+      enum: ["S256"],
+    }).notNull(),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -565,6 +583,10 @@ export const oauthAuthorizationCodesTable = pgTable(
     index("oauth_authorization_codes_client_id_idx").on(table.client_id),
     index("oauth_authorization_codes_user_id_idx").on(table.user_id),
     index("oauth_authorization_codes_expires_at_idx").on(table.expires_at),
+    check(
+      "oauth_authorization_codes_s256_only_check",
+      sql`${table.code_challenge_method} = 'S256'`,
+    ),
   ],
 );
 
@@ -594,5 +616,8 @@ export const oauthAccessTokensTable = pgTable(
     index("oauth_access_tokens_user_id_idx").on(table.user_id),
     index("oauth_access_tokens_expires_at_idx").on(table.expires_at),
     index("oauth_access_tokens_refresh_token_idx").on(table.refresh_token),
+    uniqueIndex("oauth_access_tokens_refresh_token_unique_idx")
+      .on(table.refresh_token)
+      .where(sql`${table.refresh_token} IS NOT NULL`),
   ],
 );
