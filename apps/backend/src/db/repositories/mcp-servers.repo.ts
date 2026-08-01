@@ -69,7 +69,7 @@ export class McpServersRepository {
 
   async create(input: McpServerCreateInput): Promise<DatabaseMcpServer> {
     try {
-      const [createdServer] = await db
+      const [createdServer] = await this.database
         .insert(mcpServersTable)
         .values(input)
         .returning();
@@ -81,7 +81,7 @@ export class McpServersRepository {
   }
 
   async findAll(): Promise<DatabaseMcpServer[]> {
-    return await db
+    return await this.database
       .select()
       .from(mcpServersTable)
       .orderBy(desc(mcpServersTable.created_at));
@@ -89,7 +89,7 @@ export class McpServersRepository {
 
   // Find servers accessible to a specific user (public + user's own servers)
   async findAllAccessibleToUser(userId: string): Promise<DatabaseMcpServer[]> {
-    return await db
+    return await this.database
       .select()
       .from(mcpServersTable)
       .where(
@@ -103,7 +103,7 @@ export class McpServersRepository {
 
   // Find only public servers (no user ownership)
   async findPublicServers(): Promise<DatabaseMcpServer[]> {
-    return await db
+    return await this.database
       .select()
       .from(mcpServersTable)
       .where(isNull(mcpServersTable.user_id))
@@ -112,7 +112,7 @@ export class McpServersRepository {
 
   // Find servers owned by a specific user
   async findByUserId(userId: string): Promise<DatabaseMcpServer[]> {
-    return await db
+    return await this.database
       .select()
       .from(mcpServersTable)
       .where(eq(mcpServersTable.user_id, userId))
@@ -120,7 +120,7 @@ export class McpServersRepository {
   }
 
   async findByUuid(uuid: string): Promise<DatabaseMcpServer | undefined> {
-    const [server] = await db
+    const [server] = await this.database
       .select()
       .from(mcpServersTable)
       .where(eq(mcpServersTable.uuid, uuid))
@@ -130,7 +130,7 @@ export class McpServersRepository {
   }
 
   async findByName(name: string): Promise<DatabaseMcpServer | undefined> {
-    const [server] = await db
+    const [server] = await this.database
       .select()
       .from(mcpServersTable)
       .where(eq(mcpServersTable.name, name))
@@ -144,7 +144,7 @@ export class McpServersRepository {
     name: string,
     userId: string | null,
   ): Promise<DatabaseMcpServer | undefined> {
-    const [server] = await db
+    const [server] = await this.database
       .select()
       .from(mcpServersTable)
       .where(
@@ -161,7 +161,7 @@ export class McpServersRepository {
   }
 
   async deleteByUuid(uuid: string): Promise<DatabaseMcpServer | undefined> {
-    const [deletedServer] = await db
+    const [deletedServer] = await this.database
       .delete(mcpServersTable)
       .where(eq(mcpServersTable.uuid, uuid))
       .returning();
@@ -210,7 +210,10 @@ export class McpServersRepository {
     servers: McpServerCreateInput[],
   ): Promise<DatabaseMcpServer[]> {
     try {
-      return await db.insert(mcpServersTable).values(servers).returning();
+      return await this.database
+        .insert(mcpServersTable)
+        .values(servers)
+        .returning();
     } catch (error: unknown) {
       // For bulk operations, we don't have a specific server name to report
       // Extract the actual PostgreSQL error from Drizzle's error structure
@@ -259,7 +262,7 @@ export class McpServersRepository {
     serverUuid: string;
     errorStatus: z.infer<typeof McpServerErrorStatusEnum>;
   }) {
-    const [updatedServer] = await db
+    const [updatedServer] = await this.database
       .update(mcpServersTable)
       .set({
         error_status: input.errorStatus,
@@ -275,7 +278,7 @@ export class McpServersRepository {
    * Used on startup to give servers a fresh chance.
    */
   async resetAllErrorStatuses(): Promise<number> {
-    const updated = await db
+    const updated = await this.database
       .update(mcpServersTable)
       .set({
         error_status: McpServerErrorStatusEnum.enum.NONE,
