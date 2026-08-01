@@ -429,6 +429,7 @@ export function useConnection({
               mcpProxyServerUrl.searchParams.append("command", command);
               mcpProxyServerUrl.searchParams.append("args", args);
               mcpProxyServerUrl.searchParams.append("env", JSON.stringify(env));
+              mcpProxyServerUrl.searchParams.append("configId", mcpServerUuid);
               transportOptions = {
                 authProvider: authProvider,
                 eventSourceInit: {
