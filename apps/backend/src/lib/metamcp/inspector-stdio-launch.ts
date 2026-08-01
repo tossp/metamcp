@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
 import { parse as shellParseArgs } from "shell-quote";
 import { findActualExecutable } from "spawn-rx";
@@ -15,6 +15,7 @@ export const INSPECTOR_STDIO_POLICY_VERSION = "restricted-env-v1";
 export const MAX_STDIO_COOLDOWN_ENTRIES = 1024;
 const STDIO_COOLDOWN_DURATION_MS = 10_000;
 const QUICK_FAILURE_THRESHOLD_MS = 5_000;
+const inspectorStdioFingerprintKey = randomBytes(32);
 
 export class InspectorStdioCooldownRegistry {
   private readonly entries = new Map<string, number>();
@@ -161,13 +162,14 @@ function parseLaunchQuery(query: InspectorStdioQuery) {
 export function createInspectorStdioFingerprint(
   command: string,
   args: string[],
+  key: Uint8Array,
 ): string {
   const canonicalConfiguration = JSON.stringify({
-    args,
     command,
+    args,
     policyVersion: INSPECTOR_STDIO_POLICY_VERSION,
   });
-  return createHash("sha256").update(canonicalConfiguration).digest("hex");
+  return createHmac("sha256", key).update(canonicalConfiguration).digest("hex");
 }
 
 function createCooldownKey(
@@ -214,6 +216,7 @@ export async function launchInspectorStdioTransport({
   const fingerprint = createInspectorStdioFingerprint(
     parsed.command,
     parsed.args,
+    inspectorStdioFingerprintKey,
   );
   const identity = { configId: parsed.configId, fingerprint };
   const cooldownKey = createCooldownKey(actorId, parsed.configId, fingerprint);

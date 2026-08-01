@@ -16,6 +16,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { ProcessManagedStdioTransport } from "../stdio-transport/process-managed-transport";
 import {
+  createInspectorStdioFingerprint,
   createInspectorStdioRouteAdapters,
   getInspectorStdioLaunchDetails,
   InspectorStdioCooldownRegistry,
@@ -189,6 +190,28 @@ describe("launchInspectorStdioTransport", () => {
     ).rejects.toMatchObject({
       reason: "cooldown",
     });
+  });
+});
+
+describe("createInspectorStdioFingerprint", () => {
+  it("uses a keyed stable digest without exposing raw configuration", () => {
+    const command = "/opt/private/bin/secret-command";
+    const args = ["--token", "raw-token-canary"];
+    const key = Buffer.alloc(32, 0x11);
+
+    const fingerprint = createInspectorStdioFingerprint(command, args, key);
+
+    expect(createInspectorStdioFingerprint(command, args, key)).toBe(
+      fingerprint,
+    );
+    expect(
+      createInspectorStdioFingerprint(command, args, Buffer.alloc(32, 0x22)),
+    ).not.toBe(fingerprint);
+    expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprint).not.toContain(command);
+    expect(fingerprint).not.toContain(args[0]);
+    expect(fingerprint).not.toContain(args[1]);
+    expect(fingerprint).not.toContain(key.toString("hex"));
   });
 });
 
