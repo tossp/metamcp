@@ -66,7 +66,7 @@ echo "✅ Backend server started successfully (PID: $BACKEND_PID)"
 # Start frontend
 echo "Starting frontend server..."
 cd /app/apps/frontend
-PORT=12008 pnpm start &
+PORT=12008 ./node_modules/.bin/next start &
 FRONTEND_PID=$!
 
 # Wait a moment for frontend to start
@@ -99,4 +99,4 @@ echo "Frontend running on port 12008"
 
 # Wait for both processes
 wait $BACKEND_PID
-wait $FRONTEND_PID 
+wait $FRONTEND_PID
