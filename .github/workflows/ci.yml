@@ -100,7 +100,7 @@ jobs:
       - name: Build production image
         run: docker build --file Dockerfile --tag metamcp:ci .
       - name: Verify production image runtime
-        run: docker run --rm --network none --entrypoint sh metamcp:ci -c 'set -eu; touch /app/_tmp_ci_test; rm /app/_tmp_ci_test; cd /app/apps/backend; ./node_modules/.bin/drizzle-kit --version'
+        run: docker run --rm --network none --entrypoint sh metamcp:ci -c 'set -eu; touch /app/_tmp_ci_test; rm /app/_tmp_ci_test; cd /app/apps/backend; ./node_modules/.bin/drizzle-kit --version; cd /app/apps/frontend; ./node_modules/.bin/next --version'
       - name: Build development image
         run: docker build --file Dockerfile.dev --tag metamcp-dev:ci .
       - name: Build devcontainer image
