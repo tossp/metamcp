@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "node --test lib/oauth-persistence.test.mjs"
   },
   "dependencies": {
     "@better-fetch/fetch": "1.3.1",

@@ -56,7 +56,7 @@ export const inFlightRefreshes = new Map<string, Promise<RefreshResult>>();
 // NOTE: This is intentionally safe to call repeatedly — it short-circuits
 // when there is no refresh_token or no client_id to use.
 export async function tryRefreshUpstreamTokens(
-  serverParams: Pick<ServerParameters, "uuid" | "name" | "url">,
+  serverParams: Pick<ServerParameters, "uuid" | "name" | "url" | "user_id">,
 ): Promise<RefreshResult> {
   const inFlight = inFlightRefreshes.get(serverParams.uuid);
   if (inFlight) {
@@ -77,14 +77,15 @@ export async function tryRefreshUpstreamTokens(
 }
 
 async function doRefresh(
-  serverParams: Pick<ServerParameters, "uuid" | "name" | "url">,
+  serverParams: Pick<ServerParameters, "uuid" | "name" | "url" | "user_id">,
 ): Promise<RefreshResult> {
-  if (!serverParams.url) {
+  if (!serverParams.url || !serverParams.user_id) {
     return { status: "no_session" };
   }
 
   const session = await oauthSessionsRepository.findByMcpServerUuid(
     serverParams.uuid,
+    serverParams.user_id,
   );
   if (!session) {
     return { status: "no_session" };
@@ -169,10 +170,14 @@ async function doRefresh(
     };
   }
 
-  await oauthSessionsRepository.upsert({
-    mcp_server_uuid: serverParams.uuid,
-    tokens: newTokens,
-  });
+  const persisted = await oauthSessionsRepository.upsert(
+    {
+      mcp_server_uuid: serverParams.uuid,
+      tokens: newTokens,
+    },
+    serverParams.user_id,
+  );
+  if (!persisted) return { status: "no_session" };
 
   logger.info(
     `[oauth] proxy refresh succeeded — server=${serverParams.uuid} ` +

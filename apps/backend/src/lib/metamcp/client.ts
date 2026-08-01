@@ -407,9 +407,12 @@ export const connectMetaMcpClient = async (
       //    refuses 4xx-status errors as a second line of defence.
       if (isHttpServer) {
         try {
-          const session = await oauthSessionsRepository.findByMcpServerUuid(
-            serverParams.uuid,
-          );
+          const session = serverParams.user_id
+            ? await oauthSessionsRepository.findByMcpServerUuid(
+                serverParams.uuid,
+                serverParams.user_id,
+              )
+            : undefined;
           // Approximation. `oauth_sessions.updated_at` is bumped by every
           // write to the row — token upserts (the signal we care about),
           // `state()` seeding `expected_state`, the post-success

@@ -58,6 +58,7 @@ export const mcpServersImplementations = {
         try {
           await persistPreRegisteredOAuthClient(
             createdServer.uuid,
+            userId,
             oauthClientInfo,
             oauthSessionsRepository,
           );
@@ -410,6 +411,7 @@ export const mcpServersImplementations = {
         try {
           await persistPreRegisteredOAuthClient(
             updatedServer.uuid,
+            userId,
             oauthClientInfo,
             oauthSessionsRepository,
           );

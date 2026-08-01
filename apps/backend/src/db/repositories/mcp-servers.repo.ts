@@ -11,7 +11,7 @@ import { z } from "zod";
 import logger from "@/utils/logger";
 
 import { db } from "../index";
-import { mcpServersTable } from "../schema";
+import { mcpServersTable, oauthSessionsTable } from "../schema";
 
 // Helper function to handle PostgreSQL errors
 function handleDatabaseError(
@@ -65,6 +65,8 @@ function handleDatabaseError(
 }
 
 export class McpServersRepository {
+  constructor(private readonly database: typeof db = db) {}
+
   async create(input: McpServerCreateInput): Promise<DatabaseMcpServer> {
     try {
       const [createdServer] = await db
@@ -173,13 +175,32 @@ export class McpServersRepository {
     const { uuid, ...updateData } = input;
 
     try {
-      const [updatedServer] = await db
-        .update(mcpServersTable)
-        .set(updateData)
-        .where(eq(mcpServersTable.uuid, uuid))
-        .returning();
+      return await this.database.transaction(async (tx) => {
+        const [existingServer] = await tx
+          .select({ user_id: mcpServersTable.user_id })
+          .from(mcpServersTable)
+          .where(eq(mcpServersTable.uuid, uuid))
+          .for("update");
 
-      return updatedServer;
+        if (!existingServer) return undefined;
+
+        if (
+          updateData.user_id !== undefined &&
+          updateData.user_id !== existingServer.user_id
+        ) {
+          await tx
+            .delete(oauthSessionsTable)
+            .where(eq(oauthSessionsTable.mcp_server_uuid, uuid));
+        }
+
+        const [updatedServer] = await tx
+          .update(mcpServersTable)
+          .set(updateData)
+          .where(eq(mcpServersTable.uuid, uuid))
+          .returning();
+
+        return updatedServer;
+      });
     } catch (error: unknown) {
       handleDatabaseError(error, "update", input.name);
     }

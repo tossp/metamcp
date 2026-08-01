@@ -1,167 +1,147 @@
-import type {
-  OAuthClientInformation,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
+import { describe, expect, it, vi } from "vitest";
 
-const valuesCalls: any[] = [];
-const onConflictSetCalls: any[] = [];
-const onConflictTargetCalls: any[] = [];
+vi.mock("../../index", () => ({ db: {} }));
 
-// In-memory store keyed by mcp_server_uuid that mimics
-// `INSERT ... ON CONFLICT (mcp_server_uuid) DO UPDATE SET ...` semantics.
-// Tests then assert both the persisted result AND the call shape passed
-// to Drizzle, so we pin the conditional-spread behaviour directly.
-const store = new Map<string, any>();
+const { OAUTH_STATE_TTL_MS, OAuthSessionsRepository } =
+  await import("../oauth-sessions.repo");
 
-vi.mock("../../index", () => {
-  return {
-    db: {
-      insert: () => ({
-        values: (values: any) => {
-          valuesCalls.push(values);
-          return {
-            onConflictDoUpdate: ({
-              target,
-              set,
-            }: {
-              target: unknown;
-              set: any;
-            }) => {
-              onConflictTargetCalls.push(target);
-              onConflictSetCalls.push(set);
-              return {
-                returning: async () => {
-                  const key = values.mcp_server_uuid;
-                  const now = new Date();
-                  const existing = store.get(key);
-                  if (existing) {
-                    // ON CONFLICT DO UPDATE: merge only the keys present in `set`.
-                    // Strip the sql`NOW()` updated_at because the fake can't
-                    // execute SQL — overwrite with a Date instead.
-                    const { updated_at: _ignored, ...applicable } = set;
-                    const updated = {
-                      ...existing,
-                      ...applicable,
-                      updated_at: now,
-                    };
-                    store.set(key, updated);
-                    return [updated];
-                  }
-                  // Fresh insert: schema-defaulted columns are filled with
-                  // their declared defaults (client_information => {}).
-                  const row = {
-                    uuid: `uuid-${store.size}`,
-                    mcp_server_uuid: values.mcp_server_uuid,
-                    client_information: values.client_information ?? {},
-                    tokens: values.tokens ?? null,
-                    code_verifier: values.code_verifier ?? null,
-                    created_at: now,
-                    updated_at: now,
-                  };
-                  store.set(key, row);
-                  return [row];
-                },
-              };
-            },
-          };
-        },
-      }),
-    },
+const SERVER_ID = "00000000-0000-0000-0000-000000000001";
+const ACTOR_ID = "user-1";
+
+function createUpsertDatabase(serverOwner: string | null = ACTOR_ID) {
+  const valuesCalls: Record<string, unknown>[] = [];
+  const setCalls: Record<string, unknown>[] = [];
+  let stored: Record<string, unknown> | undefined;
+
+  const database = {
+    transaction: vi.fn(async (callback: (tx: unknown) => unknown) => {
+      let selectCount = 0;
+      const tx = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              for: async () => {
+                selectCount += 1;
+                if (selectCount === 1) {
+                  return serverOwner === ACTOR_ID ? [{ uuid: SERVER_ID }] : [];
+                }
+                return stored ? [{ owner_user_id: stored.owner_user_id }] : [];
+              },
+            }),
+          }),
+        }),
+        insert: () => ({
+          values: (values: Record<string, unknown>) => {
+            valuesCalls.push(values);
+            return {
+              onConflictDoUpdate: ({
+                set,
+              }: {
+                set: Record<string, unknown>;
+              }) => {
+                setCalls.push(set);
+                return {
+                  returning: async () => {
+                    const now = new Date();
+                    const { updated_at: _ignored, ...setValues } = set;
+                    stored = stored
+                      ? { ...stored, ...setValues, updated_at: now }
+                      : {
+                          uuid: "session-1",
+                          client_information: {},
+                          tokens: null,
+                          code_verifier: null,
+                          expected_state: null,
+                          expected_state_expires_at: null,
+                          created_at: now,
+                          updated_at: now,
+                          ...values,
+                        };
+                    return [stored];
+                  },
+                };
+              },
+            };
+          },
+        }),
+      };
+      return callback(tx);
+    }),
   };
-});
 
-// Import AFTER vi.mock so the repo binds to the fake db.
-const { OAuthSessionsRepository } = await import("../oauth-sessions.repo");
+  return { database, valuesCalls, setCalls, getStored: () => stored };
+}
 
 describe("OAuthSessionsRepository.upsert", () => {
-  const repo = new OAuthSessionsRepository();
-  const serverId = "00000000-0000-0000-0000-000000000001";
+  it("writes owner and state expiry on both INSERT and conflict UPDATE", async () => {
+    const fake = createUpsertDatabase();
+    const repo = new OAuthSessionsRepository(fake.database as never);
 
-  beforeEach(() => {
-    store.clear();
-    valuesCalls.length = 0;
-    onConflictSetCalls.length = 0;
-    onConflictTargetCalls.length = 0;
+    await repo.upsert(
+      {
+        mcp_server_uuid: SERVER_ID,
+        expected_state: "state-1",
+      },
+      ACTOR_ID,
+    );
+
+    const expectedExpiry = fake.valuesCalls[0]
+      ?.expected_state_expires_at as SQL;
+    const compiledExpiry = new PgDialect().sqlToQuery(expectedExpiry);
+    expect(fake.valuesCalls[0]).toMatchObject({
+      mcp_server_uuid: SERVER_ID,
+      owner_user_id: ACTOR_ID,
+      expected_state: "state-1",
+    });
+    expect(compiledExpiry.sql).toBe("NOW() + ($1 * INTERVAL '1 millisecond')");
+    expect(compiledExpiry.params).toEqual([OAUTH_STATE_TTL_MS]);
+    expect(fake.setCalls[0]).toMatchObject({
+      owner_user_id: ACTOR_ID,
+      expected_state: "state-1",
+      expected_state_expires_at: expectedExpiry,
+    });
   });
 
-  it("uses a single ON CONFLICT statement (not check-then-insert)", async () => {
-    await repo.upsert({
-      mcp_server_uuid: serverId,
-      client_information: { client_id: "client-A" } as OAuthClientInformation,
-    });
+  it("implements latest-wins without clearing unrelated fields", async () => {
+    const fake = createUpsertDatabase();
+    const repo = new OAuthSessionsRepository(fake.database as never);
 
-    // Exactly one insert chain per call: this is what makes the upsert
-    // atomic and removes the SELECT-then-INSERT race window.
-    expect(valuesCalls).toHaveLength(1);
-    expect(onConflictSetCalls).toHaveLength(1);
-    expect(onConflictTargetCalls[0]).toBeDefined();
+    await repo.upsert(
+      {
+        mcp_server_uuid: SERVER_ID,
+        client_information: {
+          client_id: "client-A",
+        } as OAuthClientInformation,
+        expected_state: "state-1",
+      },
+      ACTOR_ID,
+    );
+    const second = await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, expected_state: "state-2" },
+      ACTOR_ID,
+    );
+
+    expect(second?.expected_state).toBe("state-2");
+    expect(second?.client_information).toEqual({ client_id: "client-A" });
+    expect(fake.setCalls[1]).not.toHaveProperty("client_information");
   });
 
-  it("two sequential upserts produce a single row whose values reflect the last call", async () => {
-    await repo.upsert({
-      mcp_server_uuid: serverId,
-      client_information: { client_id: "client-A" } as OAuthClientInformation,
-    });
-    const second = await repo.upsert({
-      mcp_server_uuid: serverId,
-      client_information: { client_id: "client-B" } as OAuthClientInformation,
-    });
+  it.each([
+    ["public server", null],
+    ["different owner", "user-2"],
+  ])("fails closed for %s", async (_label, owner) => {
+    const fake = createUpsertDatabase(owner);
+    const repo = new OAuthSessionsRepository(fake.database as never);
 
-    expect(store.size).toBe(1);
-    expect(second.client_information).toEqual({ client_id: "client-B" });
-  });
+    const result = await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, code_verifier: "verifier" },
+      ACTOR_ID,
+    );
 
-  it("partial upsert with only tokens does not write code_verifier into the SET clause", async () => {
-    await repo.upsert({
-      mcp_server_uuid: serverId,
-      tokens: { access_token: "tok", token_type: "Bearer" } as OAuthTokens,
-    });
-
-    const set = onConflictSetCalls[0];
-    expect(set).toHaveProperty("tokens");
-    expect(set).not.toHaveProperty("code_verifier");
-    expect(set).not.toHaveProperty("client_information");
-  });
-
-  it("partial upsert with only code_verifier does not clear an existing tokens column", async () => {
-    await repo.upsert({
-      mcp_server_uuid: serverId,
-      tokens: { access_token: "tok", token_type: "Bearer" } as OAuthTokens,
-    });
-    const second = await repo.upsert({
-      mcp_server_uuid: serverId,
-      code_verifier: "the-verifier",
-    });
-
-    expect(second.tokens).toEqual({
-      access_token: "tok",
-      token_type: "Bearer",
-    });
-    expect(second.code_verifier).toBe("the-verifier");
-
-    // Second call's SET must NOT mention tokens — that's what would have
-    // cleared the column if the conditional spread regressed.
-    const setOnSecond = onConflictSetCalls[1];
-    expect(setOnSecond).toHaveProperty("code_verifier");
-    expect(setOnSecond).not.toHaveProperty("tokens");
-    expect(setOnSecond).not.toHaveProperty("client_information");
-  });
-
-  it("partial upsert with only tokens does not clear an existing code_verifier", async () => {
-    await repo.upsert({
-      mcp_server_uuid: serverId,
-      code_verifier: "the-verifier",
-    });
-    const second = await repo.upsert({
-      mcp_server_uuid: serverId,
-      tokens: { access_token: "tok", token_type: "Bearer" } as OAuthTokens,
-    });
-
-    expect(second.code_verifier).toBe("the-verifier");
-    expect(second.tokens).toEqual({
-      access_token: "tok",
-      token_type: "Bearer",
-    });
+    expect(result).toBeUndefined();
+    expect(fake.valuesCalls).toHaveLength(0);
   });
 });
