@@ -23,7 +23,7 @@ run_migrations() {
     if [ -d "drizzle" ] && [ "$(ls -A drizzle/*.sql 2>/dev/null)" ]; then
         echo "Found migration files, running migrations..."
         # Use local drizzle-kit since env vars are available at system level in Docker
-        if pnpm exec drizzle-kit migrate; then
+        if ./node_modules/.bin/drizzle-kit migrate; then
             echo "Migrations completed successfully!"
         else
             echo "❌ Migration failed! Exiting..."
