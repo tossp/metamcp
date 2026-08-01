@@ -6,6 +6,12 @@ import { getBaseUrl } from "./utils";
 
 const metadataRouter = express.Router();
 
+export const OAUTH_GRANT_TYPES_SUPPORTED = [
+  "authorization_code",
+  "refresh_token",
+] as const;
+export const OAUTH_CODE_CHALLENGE_METHODS_SUPPORTED = ["S256"] as const;
+
 /**
  * OAuth 2.0 Protected Resource Metadata endpoint
  * Implementation follows RFC 9728 and MCP OAuth specification
@@ -119,7 +125,7 @@ metadataRouter.get(
         response_modes_supported: ["query"],
 
         // Supported grant types for MCP
-        grant_types_supported: ["authorization_code", "refresh_token"],
+        grant_types_supported: OAUTH_GRANT_TYPES_SUPPORTED,
 
         // Authentication methods
         token_endpoint_auth_methods_supported: [
@@ -132,7 +138,8 @@ metadataRouter.get(
         revocation_endpoint: `${baseUrl}/oauth/revoke`,
 
         // Code challenge methods - PKCE support (OAuth 2.1 compliant)
-        code_challenge_methods_supported: ["S256"],
+        code_challenge_methods_supported:
+          OAUTH_CODE_CHALLENGE_METHODS_SUPPORTED,
 
         // OAuth 2.1 compliance indicators
         require_pushed_authorization_requests: false,

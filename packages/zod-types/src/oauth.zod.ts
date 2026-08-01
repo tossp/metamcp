@@ -73,8 +73,8 @@ export const OAuthAuthorizationCodeSchema = z.object({
   redirect_uri: z.string(),
   scope: z.string(),
   user_id: z.string(),
-  code_challenge: z.string().nullable(),
-  code_challenge_method: z.string().nullable(),
+  code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  code_challenge_method: z.literal("S256"),
   expires_at: z.date(),
   created_at: z.date(),
 });
@@ -117,8 +117,8 @@ export const OAuthAuthorizationCodeCreateInputSchema = z.object({
   redirect_uri: z.string(),
   scope: z.string(),
   user_id: z.string(),
-  code_challenge: z.string().nullable().optional(),
-  code_challenge_method: z.string().nullable().optional(),
+  code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  code_challenge_method: z.literal("S256"),
   expires_at: z.number(), // timestamp
 });
 

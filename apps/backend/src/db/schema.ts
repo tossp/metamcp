@@ -17,6 +17,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -569,8 +570,10 @@ export const oauthAuthorizationCodesTable = pgTable(
     user_id: text("user_id")
       .notNull()
       .references(() => usersTable.id, { onDelete: "cascade" }),
-    code_challenge: text("code_challenge"),
-    code_challenge_method: text("code_challenge_method"),
+    code_challenge: text("code_challenge").notNull(),
+    code_challenge_method: text("code_challenge_method", {
+      enum: ["S256"],
+    }).notNull(),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -580,6 +583,10 @@ export const oauthAuthorizationCodesTable = pgTable(
     index("oauth_authorization_codes_client_id_idx").on(table.client_id),
     index("oauth_authorization_codes_user_id_idx").on(table.user_id),
     index("oauth_authorization_codes_expires_at_idx").on(table.expires_at),
+    check(
+      "oauth_authorization_codes_s256_only_check",
+      sql`${table.code_challenge_method} = 'S256'`,
+    ),
   ],
 );
 
@@ -609,5 +616,8 @@ export const oauthAccessTokensTable = pgTable(
     index("oauth_access_tokens_user_id_idx").on(table.user_id),
     index("oauth_access_tokens_expires_at_idx").on(table.expires_at),
     index("oauth_access_tokens_refresh_token_idx").on(table.refresh_token),
+    uniqueIndex("oauth_access_tokens_refresh_token_unique_idx")
+      .on(table.refresh_token)
+      .where(sql`${table.refresh_token} IS NOT NULL`),
   ],
 );

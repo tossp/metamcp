@@ -141,6 +141,13 @@
       "when": 1785552156444,
       "tag": "0019_oauth_session_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1785554305427,
+      "tag": "0020_oauth_token_consumption",
+      "breakpoints": true
     }
   ]
 }

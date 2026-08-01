@@ -12,6 +12,11 @@ import {
 
 const registrationRouter = express.Router();
 
+export const SUPPORTED_REGISTRATION_GRANT_TYPES = [
+  "authorization_code",
+  "refresh_token",
+] as const;
+
 /**
  * OAuth 2.0 Dynamic Client Registration Endpoint
  * Allows clients to dynamically register with the authorization server
@@ -81,11 +86,8 @@ registrationRouter.post("/oauth/register", rateLimitToken, async (req, res) => {
     const clientTokenEndpointAuthMethod = token_endpoint_auth_method || "none";
 
     // Validate grant types and response types consistency
-    const validGrantTypes = [
-      "authorization_code",
-      "refresh_token",
-      "client_credentials",
-    ];
+    const validGrantTypes: readonly string[] =
+      SUPPORTED_REGISTRATION_GRANT_TYPES;
     const validResponseTypes = ["code"];
     const validAuthMethods = [
       "none",
