@@ -9,6 +9,9 @@ const workspaceRoot = path.resolve(
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  env: {
+    NEXT_PUBLIC_SENTRY_DSN: globalThis.process?.env?.SENTRY_DSN,
+  },
   turbopack: {
     root: workspaceRoot,
   },
