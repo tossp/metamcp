@@ -6,6 +6,9 @@ node_modules
 .pnp.js
 .pnpm-store
 
+# Local-only Markdown documents (never commit)
+*.local.md
+
 # Local env files
 .env
 .env.local
