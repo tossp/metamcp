@@ -40,25 +40,31 @@ describe("OAuth metadata routes", () => {
   it.each([
     ["https://mcp.example", "https://mcp.example"],
     ["https://mcp.example/", "https://mcp.example"],
+    ["https://mcp.example///", "https://mcp.example"],
     ["https://mcp.example/prefix/auth", "https://mcp.example/prefix/auth"],
     ["https://mcp.example/prefix/auth/", "https://mcp.example/prefix/auth"],
     ["https://mcp.example/prefix//auth///", "https://mcp.example/prefix//auth"],
   ])(
-    "normalizes the issuer for %s without changing endpoints",
-    async (baseUrl, issuer) => {
+    "keeps authorization server identifiers consistent for %s",
+    async (baseUrl, authorizationServerUrl) => {
       vi.stubEnv("APP_URL", baseUrl);
 
-      const response = await fetch(
+      const authorizationServerResponse = await fetch(
         `${origin}/.well-known/oauth-authorization-server`,
       );
-      expect(response.status).toBe(200);
-      const metadata = await response.json();
+      expect(authorizationServerResponse.status).toBe(200);
+      const authorizationServerMetadata =
+        await authorizationServerResponse.json();
 
-      expect(metadata).toHaveProperty("issuer", issuer);
-      expect(metadata).toHaveProperty(
+      expect(authorizationServerMetadata).toHaveProperty(
+        "issuer",
+        authorizationServerUrl,
+      );
+      expect(authorizationServerMetadata).toHaveProperty(
         "issuer",
         expect.not.stringMatching(/\/$/),
       );
+      const issuer = (authorizationServerMetadata as { issuer: string }).issuer;
       for (const [field, path] of Object.entries({
         authorization_endpoint: "authorize",
         token_endpoint: "token",
@@ -66,34 +72,42 @@ describe("OAuth metadata routes", () => {
         userinfo_endpoint: "userinfo",
         revocation_endpoint: "revoke",
       })) {
-        expect(metadata).toHaveProperty(field, `${baseUrl}/oauth/${path}`);
+        expect(authorizationServerMetadata).toHaveProperty(
+          field,
+          `${baseUrl}/oauth/${path}`,
+        );
       }
-    },
-  );
 
-  it.each(["https://mcp.example", "https://mcp.example/"])(
-    "preserves protected resource metadata for %s",
-    async (baseUrl) => {
-      vi.stubEnv("APP_URL", baseUrl);
-
-      const response = await fetch(
+      const protectedResourceResponse = await fetch(
         `${origin}/.well-known/oauth-protected-resource`,
       );
-      expect(response.status).toBe(200);
-      const metadata = await response.json();
+      expect(protectedResourceResponse.status).toBe(200);
+      const protectedResourceMetadata = await protectedResourceResponse.json();
 
-      expect(metadata).toHaveProperty("authorization_servers", [baseUrl]);
-      expect(metadata).toHaveProperty("resource", "https://mcp.example/");
-      if (!baseUrl.endsWith("/")) {
-        const authorizationServer = await fetch(
-          `${origin}/.well-known/oauth-authorization-server`,
-        );
-        expect(authorizationServer.status).toBe(200);
-        expect(await authorizationServer.json()).toHaveProperty(
-          "issuer",
-          baseUrl,
-        );
-      }
+      expect(protectedResourceMetadata).toHaveProperty(
+        "authorization_servers",
+        [authorizationServerUrl],
+      );
+      expect(protectedResourceMetadata).toHaveProperty(
+        "resource",
+        baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`,
+      );
+      expect(protectedResourceMetadata).toHaveProperty(
+        "resource_server_capabilities.introspection_endpoint",
+        `${baseUrl}/oauth/introspect`,
+      );
+      expect(protectedResourceMetadata).toHaveProperty(
+        "resource_server_capabilities.revocation_endpoint",
+        `${baseUrl}/oauth/revoke`,
+      );
+      expect(protectedResourceMetadata).toHaveProperty(
+        "authorization_servers.0",
+        issuer,
+      );
+      expect(protectedResourceMetadata).toHaveProperty(
+        "resource_name",
+        "MetaMCP Protected Resource",
+      );
     },
   );
 });
