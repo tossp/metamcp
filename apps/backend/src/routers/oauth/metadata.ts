@@ -104,9 +104,8 @@ metadataRouter.get(
     try {
       const baseUrl = getBaseUrl(req);
 
-      // Ensure the issuer URL has a trailing slash for OAuth validation
-      // This is required by RFC 8414 and RFC 9728 for exact matching
-      const issuerUrl = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+      // Keep the issuer canonical without changing endpoint or resource URLs.
+      const issuerUrl = baseUrl.replace(/\/+$/, "");
 
       const metadata = {
         // Issuer identifier (required by RFC 8414)
