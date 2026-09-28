@@ -6,6 +6,10 @@ import { getBaseUrl } from "./utils";
 
 const metadataRouter = express.Router();
 
+function getAuthorizationServerUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
+}
+
 export const OAUTH_GRANT_TYPES_SUPPORTED = [
   "authorization_code",
   "refresh_token",
@@ -26,7 +30,7 @@ metadataRouter.get(
 
       // For MCP implementation, we point to our better-auth OAuth server
       // The authorization server is hosted at the same base URL
-      const authServerUrl = baseUrl;
+      const authServerUrl = getAuthorizationServerUrl(baseUrl);
 
       // Ensure the resource URL has a trailing slash for OAuth validation
       // This is required by RFC 9728 for exact resource matching
@@ -104,9 +108,8 @@ metadataRouter.get(
     try {
       const baseUrl = getBaseUrl(req);
 
-      // Ensure the issuer URL has a trailing slash for OAuth validation
-      // This is required by RFC 8414 and RFC 9728 for exact matching
-      const issuerUrl = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+      // Keep the issuer canonical without changing endpoint or resource URLs.
+      const issuerUrl = getAuthorizationServerUrl(baseUrl);
 
       const metadata = {
         // Issuer identifier (required by RFC 8414)

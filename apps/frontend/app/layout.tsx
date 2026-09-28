@@ -5,6 +5,7 @@ import localFont from "next/font/local";
 import { connection } from "next/server";
 import { Toaster } from "sonner";
 
+import { SentryProvider } from "../components/providers/sentry-provider";
 import { ThemeProvider } from "../components/providers/theme-provider";
 import { TRPCProvider } from "../components/providers/trpc-provider";
 import { APP_URL_SCRIPT_ID, getAppUrl, serializeAppUrl } from "../lib/env";
@@ -42,12 +43,14 @@ export default async function RootLayout({ children }: RootLayoutProps) {
         />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        <ThemeProvider>
-          <TRPCProvider>
-            {children}
-            <Toaster richColors position="top-right" closeButton />
-          </TRPCProvider>
-        </ThemeProvider>
+        <SentryProvider>
+          <ThemeProvider>
+            <TRPCProvider>
+              {children}
+              <Toaster richColors position="top-right" closeButton />
+            </TRPCProvider>
+          </ThemeProvider>
+        </SentryProvider>
       </body>
     </html>
   );

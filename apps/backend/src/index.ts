@@ -1,4 +1,5 @@
-import express from "express";
+import * as Sentry from "@sentry/node";
+import express, { type ErrorRequestHandler } from "express";
 
 import { auth } from "./auth";
 import { initializeIdleServers, initializeOnStartup } from "./lib/startup";
@@ -7,6 +8,50 @@ import oauthRouter from "./routers/oauth";
 import publicEndpointsRouter from "./routers/public-metamcp";
 import trpcRouter from "./routers/trpc";
 import logger from "./utils/logger";
+
+const sentryDsn = process.env.SENTRY_DSN?.trim();
+
+if (sentryDsn) {
+  Sentry.init({
+    dsn: sentryDsn,
+    integrations: (defaultIntegrations) => [
+      ...defaultIntegrations.filter(
+        (integration) =>
+          integration.name !== "Http" && integration.name !== "Express",
+      ),
+      Sentry.httpIntegration({
+        breadcrumbs: false,
+        maxIncomingRequestBodySize: "none",
+      }),
+      Sentry.expressIntegration(),
+    ],
+    sendDefaultPii: false,
+    tracesSampler: ({ parentSampled }) => {
+      if (parentSampled !== undefined) {
+        return parentSampled ? 1 : 0;
+      }
+
+      return process.env.NODE_ENV === "production" ? 0.1 : 0;
+    },
+    beforeSend(event) {
+      if (event.request) {
+        event.request = {
+          method: event.request.method,
+          url: event.request.url?.split("?")[0],
+        };
+      }
+      if (event.contexts) {
+        delete event.contexts.response;
+      }
+      if (event.extra) {
+        delete event.extra.request;
+        delete event.extra.response;
+      }
+
+      return event;
+    },
+  });
+}
 
 const app = express();
 
@@ -142,3 +187,19 @@ app.get("/health", (req, res) => {
     status: "ok",
   });
 });
+
+const sentryErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
+  if (sentryDsn) {
+    Sentry.captureException(err);
+  }
+
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
+  const statusCode = res.statusCode >= 400 ? res.statusCode : 500;
+  res.status(statusCode).json({ error: "Internal server error" });
+};
+
+app.use(sentryErrorHandler);

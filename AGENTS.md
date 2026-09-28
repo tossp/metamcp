@@ -33,6 +33,12 @@
 - Backend 启动需要 `BETTER_AUTH_SECRET` 和 `APP_URL`；数据库访问及 Drizzle 命令需要 `DATABASE_URL`。
 - 仓库已忽略 `.env`、`.env.local`、`.env.development.local`、`.env.test.local` 和 `.env.production.local`；不得提交这些文件。
 
+## 私有部署资料
+
+- 生产部署现状与只读运维说明位于 `docs/operations/deployment.local.md`，生产操作前应先阅读；文件缺失时不得猜测部署地址或路径。
+- 本地专用 Markdown 文档统一使用 `.local.md` 后缀，由 `.gitignore` 的 `*.local.md` 规则排除；不得使用 `git add -f` 提交，也不得将具体部署信息或凭据复制到 GitHub issue、PR 或其他公开载体。
+- 部署记录中的核验日期与健康状态仅为历史快照；修改、更新或重启服务前，必须确认实际目标、影响范围及明确授权。
+
 ## 数据库与副作用
 
 - PostgreSQL/Drizzle schema 位于 `apps/backend/src/db/schema.ts`；生成的 migration 应放在 `apps/backend/drizzle`。
