@@ -1,5 +1,21 @@
 import { z } from "zod";
 
+// The login callback decodes these fields but must independently validate them.
+export const OAuthAuthorizationParamsSchema = z
+  .object({
+    client_id: z.string().min(1).max(256),
+    redirect_uri: z.string().min(1).max(2048),
+    scope: z.string().min(1).max(2048).default("admin"),
+    state: z.string().max(2048).optional(),
+    code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    code_challenge_method: z.literal("S256"),
+  })
+  .strict();
+
+export type OAuthAuthorizationParams = z.infer<
+  typeof OAuthAuthorizationParamsSchema
+>;
+
 // OAuth Client Information schema (a superset of the MCP SDK's
 // OAuthClientInformationSchema). Uses `.passthrough()` so we round-trip the
 // extra RFC 7591 metadata fields the pre-registered-client UI captures

@@ -1,17 +1,8 @@
+import type { OAuthClient } from "@repo/zod-types";
 import { randomBytes } from "crypto";
 import express from "express";
 
 import logger from "@/utils/logger";
-
-// OAuth 2.0 Authorization Parameters interface
-export interface OAuthParams {
-  client_id: string;
-  redirect_uri: string;
-  scope?: string;
-  state?: string;
-  code_challenge: string;
-  code_challenge_method: "S256";
-}
 
 export function isValidS256CodeChallenge(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
@@ -71,59 +62,62 @@ export function generateSecureClientSecret(): string {
   return `mcp_secret_${randomPart}`;
 }
 
-/**
- * Validate redirect URI according to OAuth 2.1 security requirements
- * Prevents open redirect vulnerabilities
- */
+/** Application-origin or native HTTP loopback; registration matching is separate. */
 export function validateRedirectUri(
-  uri: string,
+  uri: unknown,
   allowedHosts?: string[],
 ): boolean {
   try {
-    const parsedUri = new URL(uri);
-
-    // Only allow secure schemes (no custom: schemes)
-    if (!["https:", "http:"].includes(parsedUri.protocol)) {
+    if (
+      typeof uri !== "string" ||
+      /[\s\\]/.test(uri) ||
+      uri.includes("#") ||
+      /^https?:\/\/[^/?#]*@/i.test(uri)
+    )
       return false;
-    }
-
-    const hostname = parsedUri.hostname.toLowerCase();
-    // URL.hostname normalizes IPv6 loopback to "[::1]".
-    const isLoopbackHost =
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "[::1]";
-    const isHttpLoopbackRedirect =
-      parsedUri.protocol === "http:" && isLoopbackHost;
-
-    // Production permits HTTP only for native loopback redirects.
-    if (process.env.NODE_ENV === "production") {
-      if (parsedUri.protocol !== "https:" && !isHttpLoopbackRedirect) {
-        return false;
-      }
-
-      // Do not allow local/private HTTPS redirects. HTTP loopback redirects
-      // are the exception above, but still pass through allowedHosts below.
-      if (
-        !isHttpLoopbackRedirect &&
-        (isLoopbackHost ||
-          hostname.startsWith("192.168.") ||
-          hostname.startsWith("10.") ||
-          hostname.startsWith("172."))
-      ) {
-        return false;
+    const parsedUri = new URL(uri);
+    if (
+      !["https:", "http:"].includes(parsedUri.protocol) ||
+      parsedUri.username ||
+      parsedUri.password
+    )
+      return false;
+    // Check the literal authority too: URL() normalizes short/decimal/hex IPv4
+    // and expanded IPv6. Those aliases are not part of our native-client policy.
+    const loopback =
+      parsedUri.protocol === "http:" &&
+      /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?(?:[/?]|$)/i.test(
+        uri,
+      );
+    let applicationOrigin = false;
+    if (process.env.APP_URL) {
+      try {
+        const application = new URL(process.env.APP_URL);
+        applicationOrigin =
+          ["https:", "http:"].includes(application.protocol) &&
+          !application.username &&
+          !application.password &&
+          parsedUri.origin === application.origin;
+      } catch {
+        // Invalid configuration never enables arbitrary external redirects.
       }
     }
-
-    // Check against allowed hosts if provided
-    if (allowedHosts && allowedHosts.length > 0) {
-      return allowedHosts.includes(parsedUri.hostname);
-    }
-
-    return true;
+    if (!loopback && !applicationOrigin) return false;
+    return !allowedHosts?.length || allowedHosts.includes(parsedUri.hostname);
   } catch {
     return false;
   }
+}
+
+export function isRegisteredRedirectUri(
+  uri: unknown,
+  client: Pick<OAuthClient, "redirect_uris"> | null,
+): uri is string {
+  return (
+    typeof uri === "string" &&
+    validateRedirectUri(uri) &&
+    !!client?.redirect_uris.includes(uri)
+  );
 }
 
 /**

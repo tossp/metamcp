@@ -11,63 +11,95 @@ describe("validateRedirectUri", () => {
     "http://LOCALHOST:49152/callback",
     "http://127.0.0.1:49153/callback",
     "http://[::1]:49154/callback",
-    "http://[0:0:0:0:0:0:0:1]:49155/callback",
-  ])(
-    "accepts an HTTP native loopback redirect URI in production: %s",
-    (uri) => {
-      vi.stubEnv("NODE_ENV", "production");
+  ])("accepts native HTTP loopback: %s", (uri) => {
+    expect(validateRedirectUri(uri)).toBe(true);
+  });
 
-      expect(validateRedirectUri(uri)).toBe(true);
+  it.each([
+    "https://example.com/callback",
+    "http://example.com/callback",
+    "http://192.168.1.10/callback",
+    "http://localhost.example.com/callback",
+    "http://localhost./callback",
+    "http://127.1/callback",
+    "http://2130706433/callback",
+    "http://0x7f000001/callback",
+    "http://[0:0:0:0:0:0:0:1]/callback",
+    "http://localhost@evil.example/callback",
+    "http://user:password@localhost/callback",
+    "http://@localhost/callback",
+    "http://localhost/callback#fragment",
+    "http://localhost/callback#",
+    "https://localhost/callback",
+    "http://localhost:99999/callback",
+    " http://localhost/callback",
+    "javascript:alert(1)",
+    ["http://localhost/callback"],
+    { toString: () => "http://localhost/callback" },
+    null,
+  ])("rejects other targets or ambiguous input: %j", (uri) => {
+    vi.stubEnv("APP_URL", "https://gateway.example");
+    expect(validateRedirectUri(uri)).toBe(false);
+  });
+
+  it("allows only the exact configured application origin", () => {
+    vi.stubEnv("APP_URL", "https://gateway.example/");
+    expect(validateRedirectUri("https://gateway.example/oauth/callback")).toBe(
+      true,
+    );
+    expect(validateRedirectUri("http://gateway.example/oauth/callback")).toBe(
+      false,
+    );
+    expect(
+      validateRedirectUri("https://gateway.example:8443/oauth/callback"),
+    ).toBe(false);
+    expect(
+      validateRedirectUri(
+        "https://gateway.example.evil.example/oauth/callback",
+      ),
+    ).toBe(false);
+    expect(validateRedirectUri("https://@gateway.example/oauth/callback")).toBe(
+      false,
+    );
+    expect(validateRedirectUri("https://gateway.example/oauth/callback#")).toBe(
+      false,
+    );
+    vi.stubEnv("APP_URL", "https://gateway.example:8443");
+    expect(
+      validateRedirectUri("https://gateway.example:8443/oauth/callback"),
+    ).toBe(true);
+    expect(validateRedirectUri("https://gateway.example/oauth/callback")).toBe(
+      false,
+    );
+  });
+
+  it.each(["", "invalid", "https://user:password@gateway.example"])(
+    "fails closed for an invalid APP_URL: %s",
+    (value) => {
+      vi.stubEnv("APP_URL", value);
+      expect(
+        validateRedirectUri("https://gateway.example/oauth/callback"),
+      ).toBe(false);
+      expect(validateRedirectUri("http://localhost:49152/callback")).toBe(true);
     },
   );
 
-  it.each([
-    "http://example.com:49152/callback",
-    "http://192.168.1.10:49152/callback",
-    "http://10.0.0.10:49152/callback",
-    "http://172.16.0.10:49152/callback",
-    "http://169.254.169.254:49152/callback",
-    "http://[fd00::1]:49152/callback",
-    "http://localhost.:49152/callback",
-  ])("rejects a non-loopback HTTP redirect URI in production: %s", (uri) => {
-    vi.stubEnv("NODE_ENV", "production");
-
-    expect(validateRedirectUri(uri)).toBe(false);
+  it("does not permit external addresses in development either", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_URL", "http://localhost:12008");
+    expect(validateRedirectUri("http://192.168.1.10/callback")).toBe(false);
+    expect(validateRedirectUri("http://localhost:12008/oauth/callback")).toBe(
+      true,
+    );
   });
 
-  it.each([
-    "https://localhost/callback",
-    "https://127.0.0.1/callback",
-    "https://[::1]/callback",
-  ])("rejects an HTTPS loopback redirect URI in production: %s", (uri) => {
-    vi.stubEnv("NODE_ENV", "production");
-
-    expect(validateRedirectUri(uri)).toBe(false);
-  });
-
-  it("accepts a public HTTPS redirect URI in production", () => {
-    vi.stubEnv("NODE_ENV", "production");
-
-    expect(validateRedirectUri("https://example.com/callback")).toBe(true);
-  });
-
-  it("applies allowedHosts to HTTP loopback redirect URIs in production", () => {
-    vi.stubEnv("NODE_ENV", "production");
-
+  it("retains the optional allowedHosts constraint", () => {
     expect(
       validateRedirectUri("http://localhost:49152/callback", ["localhost"]),
     ).toBe(true);
     expect(
       validateRedirectUri("http://localhost:49152/callback", ["example.com"]),
     ).toBe(false);
-  });
-
-  it("preserves non-production support for HTTP redirect URIs", () => {
-    vi.stubEnv("NODE_ENV", "test");
-
-    expect(validateRedirectUri("http://192.168.1.10:49152/callback")).toBe(
-      true,
-    );
   });
 });
 
