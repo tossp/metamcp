@@ -4,6 +4,7 @@ import {
   isBackendSessionLostError,
   isBackendTransportLostError,
   isRecoverableBackendError,
+  isSafeToRetryToolCall,
 } from "./session-error";
 
 describe("isBackendSessionLostError", () => {
@@ -224,4 +225,48 @@ describe("isRecoverableBackendError", () => {
       }),
     ).toBe(false);
   });
+});
+
+describe("isSafeToRetryToolCall", () => {
+  it("requires the exact native SDK error and a disconnected transport", () => {
+    expect(isSafeToRetryToolCall(new Error("Not connected"), true)).toBe(true);
+    expect(isSafeToRetryToolCall(new Error("Not connected"), false)).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    "Not connected",
+    { code: -32603, message: "Not connected" },
+    Object.assign(new Error("Not connected"), { code: -32603 }),
+    new Error("Not connected to database after writing"),
+    new Error("wrapper", { cause: new Error("Not connected") }),
+    new Error("Timeout"),
+    { code: -32600, message: "Invalid request" },
+    { code: -32001, message: "Business error" },
+    new Error(
+      'Error POSTing to endpoint (HTTP 404): {"error":{"code":-32603,"message":"Not connected"}}',
+    ),
+    new Error(
+      'Error POSTing to endpoint (HTTP 404): {"error":{"code":-32600,"message":"Other error"}}',
+    ),
+    new Error(
+      'Error POSTing to endpoint (HTTP 500): {"error":{"code":-32600,"message":"Session not found"}}',
+    ),
+  ])(
+    "rejects ambiguous errors even if transport has subsequently closed: %s",
+    (error) => {
+      expect(isSafeToRetryToolCall(error, true)).toBe(false);
+    },
+  );
+
+  it.each([-32001, -32600])(
+    "accepts explicit HTTP 404 session rejection with code %s",
+    (code) => {
+      const error = new Error(
+        `Error POSTing to endpoint (HTTP 404): ${JSON.stringify({ error: { code, message: "Session not found" } })}`,
+      );
+      expect(isSafeToRetryToolCall(error, false)).toBe(true);
+    },
+  );
 });

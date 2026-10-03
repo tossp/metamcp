@@ -13,6 +13,7 @@ export interface RecoverySessionPool {
   invalidateServerConnection(
     sessionId: string,
     serverUuid: string,
+    failedClient: ConnectedClient,
   ): Promise<void>;
   getSession(
     sessionId: string,
@@ -79,7 +80,11 @@ export async function requestWithSessionRecovery<T>(
       })`,
     );
 
-    await opts.pool.invalidateServerConnection(opts.sessionId, opts.serverUuid);
+    await opts.pool.invalidateServerConnection(
+      opts.sessionId,
+      opts.serverUuid,
+      opts.session,
+    );
 
     const fresh = await opts.pool.getSession(
       opts.sessionId,
