@@ -2,11 +2,13 @@
 
 import * as Sentry from "@sentry/nextjs";
 
-const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN?.trim();
+import { getBrowserSentryDsn } from "../../lib/sentry-env";
+
 let sentryInitialized = false;
 
 export function initializeSentry() {
-  if (typeof window === "undefined" || !sentryDsn || sentryInitialized) {
+  const sentryDsn = getBrowserSentryDsn();
+  if (!sentryDsn || sentryInitialized) {
     return;
   }
 
