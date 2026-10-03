@@ -1,3 +1,7 @@
+import {
+  type OAuthAuthorizationParams,
+  OAuthAuthorizationParamsSchema,
+} from "@repo/zod-types";
 import express from "express";
 
 import logger from "@/utils/logger";
@@ -7,13 +11,20 @@ import { oauthRepository } from "../../db/repositories";
 import {
   generateSecureAuthCode,
   getBaseUrl,
-  hasValidS256Pkce,
-  type OAuthParams,
+  isRegisteredRedirectUri,
   rateLimitAuth,
   validateRedirectUri,
 } from "./utils";
 
 const authorizationRouter = express.Router();
+
+function invalidAuthorization(res: express.Response) {
+  return res.status(400).json({
+    error: "invalid_request",
+    error_description:
+      "Invalid authorization parameters or unregistered redirect_uri",
+  });
+}
 
 /**
  * OAuth 2.0 Authorization Endpoint
@@ -48,25 +59,19 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
       });
     }
 
-    if (!client_id || !redirect_uri) {
-      return res.status(400).json({
-        error: "invalid_request",
-        error_description:
-          "Missing required parameters: client_id or redirect_uri",
-      });
-    }
-
-    // OAuth 2.1 Security: Enforce S256 PKCE for all clients.
-    if (!hasValidS256Pkce(code_challenge, code_challenge_method)) {
-      return res.status(400).json({
-        error: "invalid_request",
-        error_description:
-          "A valid S256 PKCE code_challenge and explicit code_challenge_method=S256 are required",
-      });
-    }
+    const parsed = OAuthAuthorizationParamsSchema.safeParse({
+      client_id,
+      redirect_uri,
+      scope,
+      state,
+      code_challenge,
+      code_challenge_method,
+    });
+    if (!parsed.success) return invalidAuthorization(res);
+    const oauthParams = parsed.data;
 
     // OAuth 2.1 Security: Validate redirect URI format
-    if (!validateRedirectUri(redirect_uri as string)) {
+    if (!validateRedirectUri(oauthParams.redirect_uri)) {
       return res.status(400).json({
         error: "invalid_request",
         error_description: "Invalid redirect_uri format or insecure scheme",
@@ -74,8 +79,8 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
     }
 
     // Validate client_id against registered clients
-    const clientData = await oauthRepository.getClient(client_id as string);
-    const finalClientId = client_id as string; // Track which client_id to use
+    const clientData = await oauthRepository.getClient(oauthParams.client_id);
+    const finalClientId = oauthParams.client_id; // Track which client_id to use
 
     if (!clientData) {
       // Client not found - direct them to use dynamic client registration
@@ -90,23 +95,13 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
       });
     } else {
       // Validate redirect_uri against registered redirect_uris for existing clients
-      if (!clientData.redirect_uris.includes(redirect_uri as string)) {
+      if (!isRegisteredRedirectUri(oauthParams.redirect_uri, clientData)) {
         return res.status(400).json({
           error: "invalid_request",
           error_description: "redirect_uri is not registered for this client",
         });
       }
     }
-
-    // Store OAuth parameters for later use (using the correct client_id)
-    const oauthParams: OAuthParams = {
-      client_id: finalClientId,
-      redirect_uri: redirect_uri as string,
-      scope: scope ? (scope as string) : "admin",
-      state: state ? (state as string) : undefined,
-      code_challenge,
-      code_challenge_method: "S256",
-    };
 
     logger.info(
       `Using client_id: ${finalClientId} (original: ${client_id}) for redirect_uri: ${redirect_uri}`,
@@ -193,24 +188,40 @@ authorizationRouter.get("/oauth/authorize", rateLimitAuth, async (req, res) => {
  */
 authorizationRouter.get("/oauth/callback", async (req, res) => {
   try {
-    let oauthParams: OAuthParams;
+    let oauthParams: OAuthAuthorizationParams;
 
     // Check if we have encoded params (from our internal redirect flow)
     const { params } = req.query;
 
-    if (params) {
-      // Decode OAuth parameters from our internal flow
-      oauthParams = JSON.parse(
-        Buffer.from(params as string, "base64url").toString(),
-      );
+    if (params !== undefined) {
+      if (
+        Object.keys(req.query).length !== 1 ||
+        typeof params !== "string" ||
+        params.length > 16384 ||
+        !/^[A-Za-z0-9_-]+$/.test(params)
+      )
+        return invalidAuthorization(res);
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(Buffer.from(params, "base64url").toString("utf8"));
+      } catch {
+        return invalidAuthorization(res);
+      }
+      const parsed = OAuthAuthorizationParamsSchema.safeParse(decoded);
+      if (!parsed.success) return invalidAuthorization(res);
+      oauthParams = parsed.data;
     } else {
       // Handle direct callback with individual query parameters
       // This is likely from an external OAuth flow or direct URL access
       const { code, state } = req.query;
 
-      if (!code) {
-        return res.status(400).send("Missing authorization code");
-      }
+      if (
+        typeof code !== "string" ||
+        !code ||
+        (state !== undefined && typeof state !== "string") ||
+        Object.keys(req.query).some((key) => key !== "code" && key !== "state")
+      )
+        return invalidAuthorization(res);
 
       // If we receive a code directly, look up the code data to get the original parameters
       const codeData = await oauthRepository.getAuthCode(code as string);
@@ -221,40 +232,22 @@ authorizationRouter.get("/oauth/callback", async (req, res) => {
           return res.status(400).send("Authorization code has expired");
         }
 
-        // Check if the redirect_uri points back to our own callback endpoint
-        // This would create an infinite loop, so we need to handle it differently
-        const baseUrl = getBaseUrl(req);
-        const ourCallbackUrl = `${baseUrl}/oauth/callback`;
+        const client = await oauthRepository.getClient(codeData.client_id);
+        if (!isRegisteredRedirectUri(codeData.redirect_uri, client))
+          return invalidAuthorization(res);
 
+        // Exact local endpoint check, not a substring of a terminal callback.
+        const target = new URL(codeData.redirect_uri);
+        const internalCallback = new URL("/oauth/callback", getBaseUrl(req));
         if (
-          codeData.redirect_uri === ourCallbackUrl ||
-          codeData.redirect_uri.includes("/oauth/callback")
+          target.origin === internalCallback.origin &&
+          target.pathname === internalCallback.pathname
         ) {
-          // This is likely a development/testing scenario where the client redirect_uri
-          // points back to our callback. Instead of redirecting, show a success page.
-
-          return res.send(`
-            <html>
-              <head><title>OAuth Authorization Successful</title></head>
-              <body>
-                <h1>Authorization Successful</h1>
-                <p>Authorization code: <code>${code}</code></p>
-                <p>State: <code>${state || "none"}</code></p>
-                <p>You can now exchange this code for an access token using the token endpoint.</p>
-                <pre>
-POST ${baseUrl}/oauth/token
-Content-Type: application/json
-
-{
-  "grant_type": "authorization_code",
-  "code": "${code}",
-  "client_id": "${codeData.client_id}",
-  "redirect_uri": "${codeData.redirect_uri}"
-}
-                </pre>
-              </body>
-            </html>
-          `);
+          return res
+            .type("text/plain")
+            .send(
+              `OAuth authorization successful\nAuthorization code: ${code}\nState: ${state ?? "none"}\n`,
+            );
         }
 
         // Code exists and is valid, redirect back to the original redirect_uri
@@ -274,17 +267,10 @@ Content-Type: application/json
 
     const { client_id, redirect_uri, state } = oauthParams;
 
-    if (
-      !hasValidS256Pkce(
-        oauthParams.code_challenge,
-        oauthParams.code_challenge_method,
-      )
-    ) {
-      return res.status(400).json({
-        error: "invalid_request",
-        error_description: "Invalid S256 PKCE authorization parameters",
-      });
-    }
+    // This endpoint is publicly reachable: never assume /authorize ran first.
+    const client = await oauthRepository.getClient(client_id);
+    if (!isRegisteredRedirectUri(redirect_uri, client))
+      return invalidAuthorization(res);
 
     // Verify user authentication by checking session cookies
     if (!req.headers.cookie) {
