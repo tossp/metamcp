@@ -1,8 +1,20 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import { drizzle } from "drizzle-orm/node-postgres";
+import express from "express";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describePg = TEST_DATABASE_URL ? describe : describe.skip;
@@ -19,6 +31,8 @@ describePg("OAuthRepository PostgreSQL token consumption", () => {
   let adminPool: Pool;
   let scopedPool: Pool;
   let repo: InstanceType<typeof import("../oauth.repo").OAuthRepository>;
+  let server: Server | undefined;
+  let origin: string;
 
   beforeAll(async () => {
     if (!TEST_DATABASE_URL) throw new Error("TEST_DATABASE_URL is required");
@@ -83,6 +97,19 @@ describePg("OAuthRepository PostgreSQL token consumption", () => {
 
     const { OAuthRepository } = await import("../oauth.repo");
     repo = new OAuthRepository(drizzle(scopedPool) as never);
+
+    // Exercise the real HTTP routes and repository against this isolated schema.
+    vi.doMock("../index", () => ({ oauthRepository: repo }));
+    const { default: tokenRouter } =
+      await import("../../../routers/oauth/token");
+    const { default: userinfoRouter } =
+      await import("../../../routers/oauth/userinfo");
+    const app = express();
+    app.use(express.json(), tokenRouter, userinfoRouter);
+    server = createServer(app);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
   beforeEach(async () => {
@@ -92,6 +119,13 @@ describePg("OAuthRepository PostgreSQL token consumption", () => {
   });
 
   afterAll(async () => {
+    if (server) {
+      const httpServer = server;
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    vi.doUnmock("../index");
     await scopedPool?.end();
     if (adminPool) {
       await adminPool.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
@@ -139,6 +173,120 @@ describePg("OAuthRepository PostgreSQL token consumption", () => {
       [accessToken, clientId, userId, refreshToken, expires],
     );
   }
+
+  async function post(path: string, body: Record<string, unknown>) {
+    return fetch(`${origin}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it.each(["introspect", "userinfo"])(
+    "preserves refresh after repeated %s checks of expired access",
+    async (endpoint) => {
+      const accessToken = "mcp_token_expired";
+      const refreshToken = "refresh-still-valid";
+      await insertToken(accessToken, refreshToken);
+      await scopedPool.query(
+        "UPDATE oauth_access_tokens SET expires_at = NOW() - INTERVAL '1 second'",
+      );
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (endpoint === "introspect") {
+          const result = await post("/oauth/introspect", {
+            token: accessToken,
+          });
+          expect(result.status).toBe(200);
+          expect(await result.json()).toEqual({ active: false });
+        } else {
+          const result = await fetch(`${origin}/oauth/userinfo`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          expect(result.status).toBe(401);
+          expect(await result.json()).toMatchObject({ error: "invalid_token" });
+        }
+      }
+
+      const refreshed = await post("/oauth/token", {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: refreshToken,
+      });
+      expect(refreshed.status).toBe(200);
+      const pair = (await refreshed.json()) as {
+        access_token: string;
+        refresh_token: string;
+      };
+      expect(pair.refresh_token).not.toBe(refreshToken);
+      const active = await post("/oauth/introspect", {
+        token: pair.access_token,
+      });
+      expect(await active.json()).toMatchObject({ active: true, sub: userId });
+      expect(await repo.getByRefreshToken(refreshToken)).toBeNull();
+      expect(await repo.getByRefreshToken(pair.refresh_token)).toMatchObject({
+        access_token: pair.access_token,
+      });
+
+      const replay = await post("/oauth/token", {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: refreshToken,
+      });
+      expect(replay.status).toBe(400);
+      expect(await replay.json()).toMatchObject({ error: "invalid_grant" });
+    },
+  );
+
+  it.each(["access", "refresh"])(
+    "still revokes the token pair explicitly via its %s token",
+    async (kind) => {
+      await insertToken("mcp_token_revoke", "refresh-revoke");
+      const revoked = await post("/oauth/revoke", {
+        token: kind === "access" ? "mcp_token_revoke" : "refresh-revoke",
+      });
+      expect(revoked.status).toBe(200);
+      expect(await repo.getAccessToken("mcp_token_revoke")).toBeNull();
+      const refreshed = await post("/oauth/token", {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: "refresh-revoke",
+      });
+      expect(refreshed.status).toBe(400);
+      expect(await refreshed.json()).toMatchObject({ error: "invalid_grant" });
+    },
+  );
+
+  it("cleans up expired pairs without removing usable access or refresh tokens", async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    await insertToken("expired-access", "valid-refresh");
+    await insertToken("expired-pair", "expired-refresh", past);
+    await insertToken("no-refresh", "remove-this-refresh");
+    await insertToken("valid-access", "expired-refresh-valid-access", past);
+    await scopedPool.query(
+      "UPDATE oauth_access_tokens SET expires_at = NOW() - INTERVAL '1 second' WHERE access_token <> 'valid-access'",
+    );
+    await scopedPool.query(
+      "UPDATE oauth_access_tokens SET refresh_token = NULL, refresh_token_expires_at = NULL WHERE access_token = 'no-refresh'",
+    );
+
+    await repo.cleanupExpired();
+
+    const remaining = await scopedPool.query(
+      "SELECT access_token FROM oauth_access_tokens ORDER BY access_token",
+    );
+    expect(remaining.rows).toEqual([
+      { access_token: "expired-access" },
+      { access_token: "valid-access" },
+    ]);
+    await expect(
+      repo.rotateRefreshToken(
+        "valid-refresh",
+        clientId,
+        replacement("cleaned"),
+      ),
+    ).resolves.not.toBeNull();
+  });
 
   it("allows exactly one concurrent authorization-code consumer", async () => {
     await insertCode("code-race");
