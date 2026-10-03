@@ -42,7 +42,7 @@ userinfoRouter.get("/oauth/userinfo", async (req, res) => {
 
     // Check if token has expired
     if (Date.now() > tokenData.expires_at.getTime()) {
-      await oauthRepository.deleteAccessToken(token);
+      // 保留同一记录中仍可能有效的刷新令牌，由 cleanupExpired 统一清理。
       return res.status(401).json({
         error: "invalid_token",
         error_description: "Access token has expired",
