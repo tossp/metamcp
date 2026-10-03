@@ -36,6 +36,13 @@ export class McpServerPool {
   // Server parameters cache: serverUuid -> ServerParameters
   private serverParamsCache: Record<string, ServerParameters> = {};
 
+  // Keep connection creation scoped to the caller's authentication/session context.
+  private acquiringSessions = new Map<
+    string,
+    Promise<ConnectedClient | undefined>
+  >();
+  private invalidatingClients = new WeakMap<ConnectedClient, Promise<void>>();
+
   // Track ongoing idle session creation to prevent duplicates
   private creatingIdleSessions: Set<string> = new Set();
 
@@ -168,6 +175,32 @@ export class McpServerPool {
    * Get or create a session for a specific MCP server
    */
   async getSession(
+    sessionId: string,
+    serverUuid: string,
+    params: ServerParameters,
+    namespaceUuid?: string,
+  ): Promise<ConnectedClient | undefined> {
+    const key = JSON.stringify([sessionId, serverUuid]);
+    const pending = this.acquiringSessions.get(key);
+    if (pending) return pending;
+
+    const acquisition = this.acquireSession(
+      sessionId,
+      serverUuid,
+      params,
+      namespaceUuid,
+    );
+    this.acquiringSessions.set(key, acquisition);
+    try {
+      return await acquisition;
+    } finally {
+      if (this.acquiringSessions.get(key) === acquisition) {
+        this.acquiringSessions.delete(key);
+      }
+    }
+  }
+
+  private async acquireSession(
     sessionId: string,
     serverUuid: string,
     params: ServerParameters,
@@ -677,89 +710,41 @@ export class McpServerPool {
     this.backgroundIdleSessionsByNamespace.set(namespaceUuid, options);
   }
 
-  /**
-   * Drop the pooled backend connection(s) for a given serverUuid.
-   *
-   * Used when a backend MCP server reports our Mcp-Session-Id is unknown
-   * or our transport is dead (e.g. after the backend container restarts and
-   * loses its in-memory session registry, or a Watchtower swap kills the
-   * socket). No replacement is created here; the next `getSession` call
-   * establishes a fresh connection (and therefore a fresh backend session)
-   * on demand.
-   *
-   * The invalidation CASCADES across every session's slot for the affected
-   * serverUuid, not just the triggering session's slot, plus the idle slot.
-   * When a backend container restarts, EVERY cached ConnectedClient for that
-   * serverUuid is dead — stale clients left in sibling sessions' slots for
-   * the same backend would defeat a single-slot invalidation: a later
-   * `getSession` for one of those siblings would hand back a dead client and
-   * the retry would fail with the same envelope that triggered recovery. So
-   * we drop them all.
-   */
+  /** Remove only references to the connection that actually failed. */
   async invalidateServerConnection(
     sessionId: string,
     serverUuid: string,
+    failedClient: ConnectedClient,
   ): Promise<void> {
-    // Collect every doomed ConnectedClient across all active sessions plus
-    // the idle slot, dropping the map entries as we go.
-    const cleanupPromises: Promise<void>[] = [];
+    const pending = this.invalidatingClients.get(failedClient);
+    if (pending) return pending;
 
+    // Detach synchronously before cleanup yields. A late error from an old
+    // client must never remove a replacement or an unrelated healthy session.
     for (const [sid, sessionServers] of Object.entries(this.activeSessions)) {
-      const cachedClient = sessionServers[serverUuid];
-      if (!cachedClient) {
-        continue;
+      if (sessionServers[serverUuid] === failedClient) {
+        delete sessionServers[serverUuid];
+        this.sessionToServers[sid]?.delete(serverUuid);
       }
-      // Each cleanup is wrapped so one failure can't strand the rest — we
-      // WANT every stale slot dropped from the map regardless.
-      cleanupPromises.push(
-        (async () => {
-          try {
-            await cachedClient.cleanup();
-          } catch (error) {
-            logger.error(
-              `Error cleaning up invalidated active session ${sid}/${serverUuid}:`,
-              error,
-            );
-          }
-        })(),
-      );
-      delete sessionServers[serverUuid];
-      this.sessionToServers[sid]?.delete(serverUuid);
     }
-
-    const idleClient = this.idleSessions[serverUuid];
-    if (idleClient) {
-      cleanupPromises.push(
-        (async () => {
-          try {
-            await idleClient.cleanup();
-          } catch (error) {
-            logger.error(
-              `Error cleaning up invalidated idle session for ${serverUuid}:`,
-              error,
-            );
-          }
-        })(),
-      );
+    if (this.idleSessions[serverUuid] === failedClient) {
       delete this.idleSessions[serverUuid];
     }
 
-    // Drop the in-flight idle-creation guard so the recovery's getSession
-    // call isn't blocked from spawning a fresh connection.
-    this.creatingIdleSessions.delete(serverUuid);
-
-    await Promise.all(cleanupPromises);
-
-    if (cleanupPromises.length > 0) {
-      logger.warn(
-        `Invalidated ${cleanupPromises.length} pooled backend connection(s) for server ${serverUuid} ` +
-          `(triggered by session ${sessionId}; cascaded across every active + idle slot for this serverUuid)`,
-      );
-    } else {
-      logger.warn(
-        `Invalidated pooled backend connection for server ${serverUuid} (session ${sessionId}) — no clients were cached`,
-      );
-    }
+    const cleanup = Promise.resolve().then(async () => {
+      try {
+        await failedClient.cleanup();
+      } catch (error) {
+        logger.error(
+          `Error cleaning up failed connection ${sessionId}/${serverUuid}:`,
+          error,
+        );
+      }
+    });
+    // Keep the settled promise for late failures on this same object. WeakMap
+    // releases it once no request retains the failed client.
+    this.invalidatingClients.set(failedClient, cleanup);
+    await cleanup;
   }
 
   /**

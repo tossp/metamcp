@@ -37,6 +37,39 @@ const HTTP_404 = "HTTP 404";
 const RPC_CODE_PATTERNS = ["-32001", "-32600"];
 const MAX_CAUSE_DEPTH = 8;
 
+/** Tool calls may write data: accept only explicit pre-execution failures. */
+export function isSafeToRetryToolCall(
+  error: unknown,
+  transportDisconnected: boolean,
+): boolean {
+  if (!(error instanceof Error)) return false;
+
+  // SDK Protocol.request rejects this exact native Error before sending.
+  // Remote McpError envelopes, wrapped errors and business messages are unsafe.
+  if (
+    transportDisconnected &&
+    error.constructor === Error &&
+    error.message === "Not connected" &&
+    !("code" in error) &&
+    error.cause === undefined
+  ) {
+    return true;
+  }
+
+  // Streamable HTTP reports the rejected session before dispatching the call.
+  const prefix = "Error POSTing to endpoint (HTTP 404): ";
+  if (!error.message.startsWith(prefix)) return false;
+  try {
+    const body = JSON.parse(error.message.slice(prefix.length));
+    return (
+      body?.error?.message === "Session not found" &&
+      (body.error.code === -32001 || body.error.code === -32600)
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Transport-disconnect signal raised by the MCP TypeScript SDK's Protocol
 // class when a request is dispatched on a transport that has already been
 // torn down. Produced verbatim ("Not connected") whenever the cached
@@ -216,11 +249,9 @@ export function isBackendTransportLostError(error: unknown): boolean {
 }
 
 /**
- * Convenience predicate — either the session-lost OR transport-lost
- * detector fires. Tool-call and dynamic-find recovery paths in
- * `metamcp-proxy.ts` use this so they engage the same invalidate +
- * reconnect + retry sequence regardless of which envelope the failure
- * arrived in.
+ * Broad recovery predicate for read-only discovery. Tool calls must use
+ * isSafeToRetryToolCall: these substring/envelope matches do not establish
+ * that a potentially mutating request was rejected before execution.
  */
 export function isRecoverableBackendError(error: unknown): boolean {
   return isBackendSessionLostError(error) || isBackendTransportLostError(error);

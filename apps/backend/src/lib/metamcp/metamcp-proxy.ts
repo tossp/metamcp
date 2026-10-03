@@ -56,7 +56,7 @@ import {
   createToolOverridesListToolsMiddleware,
   mapOverrideNameToOriginal,
 } from "./metamcp-middleware/tool-overrides.functional";
-import { isBackendSessionLostError } from "./session-error";
+import { isSafeToRetryToolCall } from "./session-error";
 import { parseToolName } from "./tool-name-parser";
 import { toolsSyncCache } from "./tools-sync-cache";
 import { sanitizeName } from "./utils";
@@ -118,7 +118,6 @@ export const createServer = async (
   clientRequestHeaders?: Record<string, string>,
   requestContext?: Pick<MetaMCPHandlerContext, "endpointName" | "auth">,
 ) => {
-  const toolToClient: Record<string, ConnectedClient> = {};
   const toolToServerUuid: Record<string, string> = {};
   const promptToClient: Record<string, ConnectedClient> = {};
   const resourceToClient: Record<string, ConnectedClient> = {};
@@ -335,20 +334,16 @@ export const createServer = async (
           // Invalidate-and-retry-once on session-lost / transport-lost.
           // Without it a dead pooled session is never evicted from here and
           // the namespace serves 0 tools as "success" until a manual restart.
-          let activeSession = session;
           const allServerTools = await requestWithSessionRecovery({
             pool: mcpServerPool,
             sessionId: context.sessionId,
             serverUuid: mcpServerUuid,
-            params,
+            params: effectiveParams,
             namespaceUuid,
             operation: "tools/list",
             serverName,
             session,
             attempt: fetchAllToolPages,
-            onFreshSession: (fresh) => {
-              activeSession = fresh;
-            },
           });
 
           console.log(
@@ -398,7 +393,6 @@ export const createServer = async (
           // Use original tools for client response (middleware will be applied later)
           const toolsWithSource = allServerTools.map((tool) => {
             const toolName = `${sanitizeName(serverName)}__${tool.name}`;
-            toolToClient[toolName] = activeSession;
             toolToServerUuid[toolName] = mcpServerUuid;
 
             return {
@@ -447,11 +441,10 @@ export const createServer = async (
     const { serverName: serverPrefix, originalToolName } = parsed;
 
     // Try to find the tool in pre-populated mappings first
-    let clientForTool = toolToClient[name];
     let serverUuid = toolToServerUuid[name];
 
     // If not found in mappings, dynamically find the server and route the call
-    if (!clientForTool || !serverUuid) {
+    if (!serverUuid) {
       try {
         // Get all MCP servers for this namespace
         const serverParams = await getMcpServers(
@@ -515,9 +508,7 @@ export const createServer = async (
                   ) {
                     foundTool = true;
                     // Tool exists, populate mappings for future use and use it
-                    clientForTool = session;
                     serverUuid = mcpServerUuid;
-                    toolToClient[name] = session;
                     toolToServerUuid[name] = mcpServerUuid;
                     break;
                   }
@@ -544,12 +535,36 @@ export const createServer = async (
       }
     }
 
-    if (!clientForTool) {
+    if (!serverUuid) {
       throw new Error(`Unknown tool: ${name}`);
     }
 
-    if (!serverUuid) {
-      throw new Error(`Server UUID not found for tool: ${name}`);
+    const serverParamsMap = await getMcpServers(
+      namespaceUuid,
+      includeInactiveServers,
+    );
+    const params = serverParamsMap[serverUuid];
+    if (!params) {
+      throw new Error(
+        `Server ${serverUuid} no longer present in namespace ${namespaceUuid}`,
+      );
+    }
+    const forwardedHeaders = context.clientRequestHeaders
+      ? extractForwardedHeaders(context.clientRequestHeaders, serverParamsMap)[
+          serverUuid
+        ]
+      : undefined;
+    const effectiveParams = forwardedHeaders
+      ? { ...params, headers: mergeHeaders(params.headers, forwardedHeaders) }
+      : params;
+    const clientForTool = await mcpServerPool.getSession(
+      sessionId,
+      serverUuid,
+      effectiveParams,
+      namespaceUuid,
+    );
+    if (!clientForTool) {
+      throw new Error(`No session available for server ${serverUuid}`);
     }
 
     const abortController = new AbortController();
@@ -584,7 +599,12 @@ export const createServer = async (
     try {
       return (await callOnce(clientForTool)) as CallToolResult;
     } catch (error) {
-      if (!isBackendSessionLostError(error)) {
+      if (
+        !isSafeToRetryToolCall(
+          error,
+          clientForTool.client.transport === undefined,
+        )
+      ) {
         logger.error(
           `Error calling tool "${name}" through ${
             clientForTool.client.getServerVersion()?.name || "unknown"
@@ -595,27 +615,19 @@ export const createServer = async (
       }
 
       logger.warn(
-        `Backend reported session lost for server ${serverUuid} on tool "${name}"; invalidating pool and retrying once.`,
+        `Backend connection lost for server ${serverUuid} on tool "${name}"; invalidating pool and retrying once.`,
       );
 
-      await mcpServerPool.invalidateServerConnection(sessionId, serverUuid);
-      delete toolToClient[name];
-
-      const serverParamsMap = await getMcpServers(
-        namespaceUuid,
-        includeInactiveServers,
+      await mcpServerPool.invalidateServerConnection(
+        sessionId,
+        serverUuid,
+        clientForTool,
       );
-      const params = serverParamsMap[serverUuid];
-      if (!params) {
-        throw new Error(
-          `Cannot re-initialize session: server ${serverUuid} no longer present in namespace ${namespaceUuid}`,
-        );
-      }
 
       const freshSession = await mcpServerPool.getSession(
         sessionId,
         serverUuid,
-        params,
+        effectiveParams,
         namespaceUuid,
       );
       if (!freshSession) {
@@ -623,8 +635,6 @@ export const createServer = async (
           `Failed to re-initialize session for server ${serverUuid} after backend session loss`,
         );
       }
-
-      toolToClient[name] = freshSession;
 
       try {
         return (await callOnce(freshSession)) as CallToolResult;
@@ -832,7 +842,7 @@ export const createServer = async (
             pool: mcpServerPool,
             sessionId,
             serverUuid: uuid,
-            params,
+            params: effectiveParams,
             namespaceUuid,
             operation: "prompts/list",
             serverName,
@@ -980,7 +990,7 @@ export const createServer = async (
             pool: mcpServerPool,
             sessionId,
             serverUuid: uuid,
-            params,
+            params: effectiveParams,
             namespaceUuid,
             operation: "resources/list",
             serverName,
@@ -1161,7 +1171,7 @@ export const createServer = async (
               pool: mcpServerPool,
               sessionId,
               serverUuid: uuid,
-              params,
+              params: effectiveParams,
               namespaceUuid,
               operation: "resources/templates/list",
               serverName,
