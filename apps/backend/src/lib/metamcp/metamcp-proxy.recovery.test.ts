@@ -15,7 +15,11 @@ import type {
   ListToolsHandler,
 } from "./metamcp-middleware/functional-middleware";
 
-const mocks = vi.hoisted(() => ({ connect: vi.fn(), getServers: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  connect: vi.fn(),
+  getServers: vi.fn(),
+  auditErrors: [] as unknown[],
+}));
 vi.mock("./client", () => ({ connectMetaMcpClient: mocks.connect }));
 vi.mock("./fetch-metamcp", () => ({ getMcpServers: mocks.getServers }));
 vi.mock("../../db/repositories/oauth-sessions.repo", () => ({
@@ -43,7 +47,17 @@ vi.mock("../config.service", () => ({
   },
 }));
 vi.mock("./metamcp-middleware/audit-requests.functional", () => ({
-  createAuditCallToolMiddleware: () => (h: CallToolHandler) => h,
+  createAuditCallToolMiddleware:
+    () =>
+    (h: CallToolHandler): CallToolHandler =>
+    async (request, context) => {
+      try {
+        return await h(request, context);
+      } catch (error) {
+        mocks.auditErrors.push(error);
+        throw error;
+      }
+    },
 }));
 vi.mock("./metamcp-middleware/filter-tools.functional", () => ({
   createFilterCallToolMiddleware: () => (h: CallToolHandler) => h,
@@ -122,6 +136,7 @@ async function frontend(id = "session") {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.auditErrors.length = 0;
   connections.length = 0;
   backendCalls
     .mockReset()
@@ -224,6 +239,33 @@ describe("tool calls through the real SDK and pool", () => {
     expect(connections[0].cleanup).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["Internal error", -32603, "发生内部错误"],
+    ["Not connected", -32603, "连接已断开"],
+    ["Request timed out", -32001, "响应超时"],
+  ] as const)(
+    "delivers a useful explanation for %s through the SDK without retrying",
+    async (detail, code, explanation) => {
+      const client = await frontend();
+      backendCalls.mockRejectedValue(
+        new McpError(code, detail, { traceId: "trace-1" }),
+      );
+      await expect(
+        client.callTool({ name: "blinko__write" }),
+      ).rejects.toMatchObject({
+        code,
+        data: { traceId: "trace-1" },
+        message: expect.stringContaining(explanation),
+      });
+      expect((mocks.auditErrors[0] as Error).message).toContain(detail);
+      expect((mocks.auditErrors[0] as Error).message).not.toContain(
+        explanation,
+      );
+      expect(backendCalls).toHaveBeenCalledTimes(1);
+      expect(mocks.connect).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("does not retry a tool isError result", async () => {
     const client = await frontend();
     backendCalls.mockResolvedValue({
@@ -246,7 +288,7 @@ describe("tool calls through the real SDK and pool", () => {
       return c;
     });
     await expect(client.callTool({ name: "blinko__write" })).rejects.toThrow(
-      "Not connected",
+      "连接已断开",
     );
     expect(mocks.connect).toHaveBeenCalledTimes(2);
     expect(backendCalls).not.toHaveBeenCalled();
@@ -304,7 +346,7 @@ describe("tool calls through the real SDK and pool", () => {
     const client = await frontend();
     mocks.getServers.mockResolvedValue({});
     await expect(client.callTool({ name: "blinko__write" })).rejects.toThrow(
-      "no longer present",
+      "当前不可用",
     );
     expect(backendCalls).not.toHaveBeenCalled();
   });

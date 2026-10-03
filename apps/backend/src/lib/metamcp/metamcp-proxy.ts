@@ -57,6 +57,7 @@ import {
   mapOverrideNameToOriginal,
 } from "./metamcp-middleware/tool-overrides.functional";
 import { isSafeToRetryToolCall } from "./session-error";
+import { formatToolCallError } from "./tool-call-error";
 import { parseToolName } from "./tool-name-parser";
 import { toolsSyncCache } from "./tools-sync-cache";
 import { sanitizeName } from "./utils";
@@ -702,7 +703,14 @@ export const createServer = async (
       );
     }
 
-    return await callToolWithMiddleware(request, handlerContext);
+    try {
+      return await callToolWithMiddleware(request, handlerContext);
+    } catch (error) {
+      // Recovery and audit middleware see the original error. Translate only
+      // at the consumer boundary, retaining raw diagnostics in server logs.
+      logger.error(`Tool call failed: ${request.params.name}`, error);
+      throw formatToolCallError(error, request.params.name);
+    }
   });
 
   // Get Prompt Handler
