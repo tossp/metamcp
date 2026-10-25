@@ -11,7 +11,7 @@
 
 ## 工具链与命令
 
-- 这是私有的 pnpm/Turbo monorepo。统一使用 Node.js `>=24.15.0 <25` 和根目录声明的 `pnpm@11.18.0`；workspace 为 `apps/*` 与 `packages/*`，lockfile 为 v9。
+- 这是私有的 pnpm/Turbo monorepo。统一使用 Node.js `>=24.22.1 <25` 和根目录声明的 `pnpm@11.18.0`；workspace 为 `apps/*` 与 `packages/*`，lockfile 为 v9。
 - 根目录检查命令为 `pnpm lint`、`pnpm check-types` 和 `pnpm build`。`pnpm dev` 先通过 `dotenv` 加载 `.env.local`，再启动 Turbo task。
 - `pnpm format` 与 `pnpm lint:fix` 会重写文件。共享 lint 规则还强制执行 Prettier 格式、import 排序和移除未使用的 import；允许以下划线开头的变量。
 

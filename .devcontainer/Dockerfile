@@ -1,5 +1,5 @@
 # DevContainer Dockerfile optimized for VS Code development
-ARG NODE_VERSION=24.15.0
+ARG NODE_VERSION=24.22.1
 ARG PNPM_VERSION=11.18.0
 
 FROM ghcr.io/astral-sh/uv:0.12.0 AS uv
