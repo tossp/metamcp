@@ -15,7 +15,7 @@
   "dependencies": {
     "@repo/zod-types": "workspace:*",
     "@trpc/server": "11.18.0",
-    "zod": "^4.6.6"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
