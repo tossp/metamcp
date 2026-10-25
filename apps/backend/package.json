@@ -42,7 +42,7 @@
     "pg": "8.22.0",
     "shell-quote": "1.10.0",
     "spawn-rx": "6.0.1",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
