@@ -39,6 +39,7 @@ import type * as z4 from "zod/v4/core";
 
 import { SESSION_KEYS } from "@/lib/constants";
 
+import { buildConnectionUrl } from "../lib/connection-url";
 import { ConnectionStatus } from "../lib/constants";
 import { getAppUrl } from "../lib/env";
 import {
@@ -66,10 +67,7 @@ export type MakeRequestFn = <T extends AnySchema>(
 interface UseConnectionOptions {
   mcpServerUuid: string;
   transportType: McpServerType;
-  command: string;
-  args: string;
   url: string;
-  env: Record<string, string>;
   bearerToken?: string;
   headerName?: string;
   onNotification?: (notification: Notification) => void;
@@ -86,10 +84,7 @@ interface UseConnectionOptions {
 export function useConnection({
   mcpServerUuid,
   transportType,
-  command,
-  args,
   url,
-  env,
   bearerToken,
   headerName,
   onNotification,
@@ -365,7 +360,20 @@ export function useConnection({
         return;
       }
 
+      const isSavedStdio =
+        !isMetaMCP && transportType === McpServerTypeEnum.enum.STDIO;
       try {
+        const mcpProxyServerUrl = buildConnectionUrl(
+          {
+            mcpServerUuid,
+            transportType,
+            url,
+            isMetaMCP,
+            includeInactiveServers,
+          },
+          getAppUrl(),
+        );
+
         // Inject auth manually instead of using SSEClientTransport, because we're
         // proxying through the inspector server first.
         const headers: HeadersInit = {};
@@ -389,19 +397,8 @@ export function useConnection({
         let transportOptions:
           StreamableHTTPClientTransportOptions | SSEClientTransportOptions;
 
-        let mcpProxyServerUrl: URL;
-
         // Handle MetaMCP connections
         if (isMetaMCP) {
-          // For MetaMCP, we use SSE connection to the metamcp proxy endpoint
-          mcpProxyServerUrl = new URL(url, getAppUrl());
-          // Add includeInactiveServers as a query parameter
-          if (includeInactiveServers) {
-            mcpProxyServerUrl.searchParams.append(
-              "includeInactiveServers",
-              "true",
-            );
-          }
           transportOptions = {
             eventSourceInit: {
               fetch: (
@@ -422,14 +419,6 @@ export function useConnection({
         } else {
           switch (transportType) {
             case McpServerTypeEnum.enum.STDIO:
-              mcpProxyServerUrl = new URL(
-                `/mcp-proxy/server/stdio`,
-                getAppUrl(),
-              );
-              mcpProxyServerUrl.searchParams.append("command", command);
-              mcpProxyServerUrl.searchParams.append("args", args);
-              mcpProxyServerUrl.searchParams.append("env", JSON.stringify(env));
-              mcpProxyServerUrl.searchParams.append("configId", mcpServerUuid);
               transportOptions = {
                 authProvider: authProvider,
                 eventSourceInit: {
@@ -458,8 +447,6 @@ export function useConnection({
               break;
 
             case McpServerTypeEnum.enum.SSE:
-              mcpProxyServerUrl = new URL(`/mcp-proxy/server/sse`, getAppUrl());
-              mcpProxyServerUrl.searchParams.append("url", url);
               transportOptions = {
                 eventSourceInit: {
                   fetch: (
@@ -487,8 +474,6 @@ export function useConnection({
               break;
 
             case McpServerTypeEnum.enum.STREAMABLE_HTTP:
-              mcpProxyServerUrl = new URL(`/mcp-proxy/server/mcp`, getAppUrl());
-              mcpProxyServerUrl.searchParams.append("url", url);
               transportOptions = {
                 authProvider: authProvider,
                 eventSourceInit: {
@@ -521,8 +506,6 @@ export function useConnection({
               setConnectionStatus("error");
               return;
           }
-
-          mcpProxyServerUrl.searchParams.append("transportType", transportType);
         }
 
         if (onNotification) {
@@ -578,8 +561,8 @@ export function useConnection({
           });
         } catch (error) {
           console.error(
-            `Failed to connect to MCP Server via the MCP Inspector Proxy: ${mcpProxyServerUrl}:`,
-            error,
+            "Failed to connect to MCP Server via the MCP Inspector Proxy:",
+            isSavedStdio ? "Saved STDIO connection failed" : error,
           );
 
           // Check if it's a proxy auth error
@@ -622,7 +605,7 @@ export function useConnection({
         setMcpClient(client);
         setConnectionStatus("connected");
       } catch (e) {
-        console.error(e);
+        console.error(isSavedStdio ? "Saved STDIO connection failed" : e);
         setConnectionStatus("error");
       }
     },

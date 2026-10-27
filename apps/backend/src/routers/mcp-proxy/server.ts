@@ -16,10 +16,10 @@ import logger from "@/utils/logger";
 import { mcpServersRepository } from "../../db/repositories";
 import mcpProxy from "../../lib/mcp-proxy";
 import { transformDockerUrl } from "../../lib/metamcp/client";
+import { inspectorStdioRouteAdapters } from "../../lib/metamcp/inspector-stdio-config";
 import {
   InspectorStdioLaunchError,
   InspectorStdioLaunchInput,
-  inspectorStdioRouteAdapters,
 } from "../../lib/metamcp/inspector-stdio-launch";
 import { ProcessManagedStdioTransport } from "../../lib/stdio-transport/process-managed-transport";
 import { betterAuthMcpMiddleware } from "../../middleware/better-auth-mcp.middleware";

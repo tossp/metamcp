@@ -1,10 +1,14 @@
 /* eslint-disable turbo/no-undeclared-env-vars */
 import { randomUUID } from "node:crypto";
-import { access, readdir, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import process from "node:process";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdtemp: vi.fn(actual.mkdtemp) };
+});
 
 vi.mock("@/utils/logger", () => ({
   default: {
@@ -165,11 +169,7 @@ describe("launchInspectorStdioTransport", () => {
   });
 
   it("returns spawn failure then cooldown for a nonexistent executable", async () => {
-    const rootsBefore = new Set(
-      (await readdir(tmpdir())).filter((name) =>
-        name.startsWith("metamcp-inspector-"),
-      ),
-    );
+    const createdBefore = vi.mocked(mkdtemp).mock.results.length;
     const query = {
       args: "",
       command: `/definitely-missing-inspector-${Date.now()}`,
@@ -181,10 +181,15 @@ describe("launchInspectorStdioTransport", () => {
     ).rejects.toMatchObject({
       reason: "spawn_failed",
     });
-    const rootsAfter = (await readdir(tmpdir())).filter(
-      (name) => name.startsWith("metamcp-inspector-") && !rootsBefore.has(name),
+    // Check only this launch's directories; concurrent suites also create roots.
+    const ownedRoots = await Promise.all(
+      vi
+        .mocked(mkdtemp)
+        .mock.results.slice(createdBefore)
+        .map((result) => result.value),
     );
-    expect(rootsAfter).toEqual([]);
+    expect(ownedRoots).toHaveLength(1);
+    for (const root of ownedRoots) await expect(access(root)).rejects.toThrow();
     await expect(
       launchInspectorStdioTransport({ query }),
     ).rejects.toMatchObject({
