@@ -49,6 +49,8 @@ describePg("McpServersRepository PostgreSQL owner lifecycle", () => {
         url text,
         error_status text NOT NULL DEFAULT 'NONE',
         created_at timestamptz NOT NULL DEFAULT NOW(),
+        tool_catalog_revision integer NOT NULL DEFAULT 0,
+        tool_catalog_refreshed_at timestamptz,
         bearer_token text,
         headers jsonb NOT NULL DEFAULT '{}'::jsonb,
         forward_headers jsonb NOT NULL DEFAULT '{}'::jsonb,

@@ -25,14 +25,11 @@ import {
   mcpServersRepository,
   namespaceMappingsRepository,
   namespacesRepository,
-  toolsRepository,
 } from "../db/repositories";
 import { NamespacesSerializer } from "../db/serializers";
-import {
-  clearOverrideCache,
-  mapOverrideNameToOriginal,
-} from "../lib/metamcp/metamcp-middleware/tool-overrides.functional";
+import { clearOverrideCache } from "../lib/metamcp/metamcp-middleware/tool-overrides.functional";
 import { metaMcpServerPool } from "../lib/metamcp/metamcp-server-pool";
+import { toolsImplementations } from "./tools.impl";
 
 export const namespacesImplementations = {
   create: async (
@@ -652,269 +649,17 @@ export const namespacesImplementations = {
     input: z.infer<typeof RefreshNamespaceToolsRequestSchema>,
     userId: string,
   ): Promise<z.infer<typeof RefreshNamespaceToolsResponseSchema>> => {
-    try {
-      // First, check if user has permission to refresh tools for this namespace
-      const namespace = await namespacesRepository.findByUuid(
-        input.namespaceUuid,
-      );
-
-      if (!namespace) {
-        return {
-          success: false as const,
-          message: "Namespace not found",
-        };
-      }
-
-      // Check if user owns this namespace (only owners can refresh tools)
-      if (namespace.user_id && namespace.user_id !== userId) {
-        return {
-          success: false as const,
-          message:
-            "Access denied: You can only refresh tools for namespaces you own",
-        };
-      }
-
-      if (!input.tools || input.tools.length === 0) {
-        return {
-          success: true as const,
-          message: "No tools to refresh",
-          toolsCreated: 0,
-          mappingsCreated: 0,
-        };
-      }
-
-      // Parse tool names to extract server names and actual tool names
-      // Important: The input tools may have overridden names applied by MetaMCP middleware
-      // We need to map them back to original names to avoid overwriting original names in the database
-      const parsedTools: Array<{
-        serverName: string;
-        toolName: string;
-        description: string;
-        inputSchema: Record<string, unknown>;
-      }> = [];
-
-      for (const tool of input.tools) {
-        // Split by "__" - use last occurrence if there are multiple
-        const lastDoubleUnderscoreIndex = tool.name.lastIndexOf("__");
-
-        if (lastDoubleUnderscoreIndex === -1) {
-          logger.warn(
-            `Tool name "${tool.name}" does not contain "__" separator, skipping`,
-          );
-          continue;
-        }
-
-        const serverName = tool.name.substring(0, lastDoubleUnderscoreIndex);
-        const toolName = tool.name.substring(lastDoubleUnderscoreIndex + 2);
-
-        // Check if this tool name might be an override name by looking up the original name
-        // If it is an override name, skip this tool entirely to avoid duplicates
-        try {
-          const fullToolName = `${serverName}__${toolName}`;
-          const originalToolName = await mapOverrideNameToOriginal(
-            fullToolName,
-            input.namespaceUuid,
-          );
-
-          // If we found an original name mapping, this means the current toolName is an override
-          // Skip this tool to avoid creating duplicates
-          if (originalToolName !== fullToolName) {
-            logger.info(
-              `Skipping override tool "${fullToolName}" as it maps to original "${originalToolName}"`,
-            );
-            continue;
-          }
-        } catch (error) {
-          // If mapping fails, continue with the parsed name (it's likely an original tool)
-          logger.warn(
-            `Failed to map override name for tool "${toolName}":`,
-            error,
-          );
-        }
-
-        if (!serverName || !toolName) {
-          logger.warn(`Invalid tool name format "${tool.name}", skipping`);
-          continue;
-        }
-
-        parsedTools.push({
-          serverName,
-          toolName,
-          description: tool.description || "",
-          inputSchema: tool.inputSchema,
-        });
-      }
-
-      if (parsedTools.length === 0) {
-        return {
-          success: true as const,
-          message: "No valid tools to refresh after parsing",
-          toolsCreated: 0,
-          mappingsCreated: 0,
-        };
-      }
-
-      // Group tools by server name and resolve server UUIDs
-      const toolsByServerName: Record<
-        string,
-        {
-          serverUuid: string;
-          tools: Array<{
-            toolName: string;
-            description: string;
-            inputSchema: Record<string, unknown>;
-          }>;
-        }
-      > = {};
-
-      for (const parsedTool of parsedTools) {
-        // Find server by name - first try exact match
-        let server = await mcpServersRepository.findByName(
-          parsedTool.serverName,
-        );
-
-        // If exact match fails, try to handle nested MetaMCP scenarios
-        // For nested MetaMCP, tool names may be in format "ParentServer__ChildServer__tool"
-        // but we need to find the actual "ParentServer" in the database
-        if (!server && parsedTool.serverName.includes("__")) {
-          // Try the first part before the first "__" (this would be the actual server)
-          const firstDoubleUnderscoreIndex =
-            parsedTool.serverName.indexOf("__");
-          const actualServerName = parsedTool.serverName.substring(
-            0,
-            firstDoubleUnderscoreIndex,
-          );
-
-          server = await mcpServersRepository.findByName(actualServerName);
-
-          if (server) {
-            logger.info(
-              `Found nested MetaMCP server mapping: "${parsedTool.serverName}" -> "${actualServerName}"`,
-            );
-            // Update the parsed tool to use the correct server name and adjust tool name
-            const remainingPart = parsedTool.serverName.substring(
-              firstDoubleUnderscoreIndex + 2,
-            );
-            parsedTool.toolName = `${remainingPart}__${parsedTool.toolName}`;
-            parsedTool.serverName = actualServerName;
-          }
-        }
-
-        if (!server) {
-          logger.warn(
-            `Server "${parsedTool.serverName}" not found in database, skipping tool "${parsedTool.toolName}"`,
-          );
-          continue;
-        }
-
-        if (!toolsByServerName[parsedTool.serverName]) {
-          toolsByServerName[parsedTool.serverName] = {
-            serverUuid: server.uuid,
-            tools: [],
-          };
-        }
-
-        toolsByServerName[parsedTool.serverName].tools.push({
-          toolName: parsedTool.toolName,
-          description: parsedTool.description,
-          inputSchema: parsedTool.inputSchema,
-        });
-      }
-
-      if (Object.keys(toolsByServerName).length === 0) {
-        return {
-          success: false as const,
-          message: "No servers found for the provided tools",
-        };
-      }
-
-      let totalToolsCreated = 0;
-      let totalMappingsCreated = 0;
-
-      // Process tools for each server
-      for (const [serverName, serverData] of Object.entries(
-        toolsByServerName,
-      )) {
-        const { serverUuid, tools } = serverData;
-
-        // Bulk upsert tools to the tools table with the actual tool names
-        const upsertedTools = await toolsRepository.bulkUpsert({
-          mcpServerUuid: serverUuid,
-          tools: tools.map((tool) => ({
-            name: tool.toolName, // Use the actual tool name, not the prefixed name
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-          })),
-        });
-
-        totalToolsCreated += upsertedTools.length;
-
-        // Create namespace tool mappings
-        const toolMappings = upsertedTools.map((tool) => ({
-          toolUuid: tool.uuid,
-          serverUuid: serverUuid,
-          status: "ACTIVE" as const,
-        }));
-
-        const createdMappings =
-          await namespaceMappingsRepository.bulkUpsertNamespaceToolMappings({
-            namespaceUuid: input.namespaceUuid,
-            toolMappings,
-          });
-
-        totalMappingsCreated += createdMappings.length;
-
-        logger.info(
-          `Processed ${tools.length} tools for server "${serverName}" (${serverUuid})`,
-        );
-      }
-
-      // Invalidate idle MetaMCP server for this namespace since tools were refreshed
-      // Run this asynchronously to avoid blocking the response
-      metaMcpServerPool
-        .invalidateIdleServer(input.namespaceUuid)
-        .then(() => {
-          logger.info(
-            `Invalidated idle MetaMCP server for namespace ${input.namespaceUuid} after tools refresh`,
-          );
-        })
-        .catch((error) => {
-          logger.error(
-            `Error invalidating idle MetaMCP server for namespace ${input.namespaceUuid}:`,
-            error,
-          );
-          // Don't fail the entire operation if idle server invalidation fails
-        });
-
-      // Also invalidate OpenAPI sessions for this namespace
-      metaMcpServerPool
-        .invalidateOpenApiSessions([input.namespaceUuid])
-        .then(() => {
-          logger.info(
-            `Invalidated OpenAPI session for namespace ${input.namespaceUuid} after tools refresh`,
-          );
-        })
-        .catch((error) => {
-          logger.error(
-            `Error invalidating OpenAPI session for namespace ${input.namespaceUuid}:`,
-            error,
-          );
-          // Don't fail the entire operation if OpenAPI session invalidation fails
-        });
-
-      return {
-        success: true as const,
-        message: `Successfully refreshed ${totalToolsCreated} tools with ${totalMappingsCreated} mappings`,
-        toolsCreated: totalToolsCreated,
-        mappingsCreated: totalMappingsCreated,
-      };
-    } catch (error) {
-      logger.error("Error refreshing namespace tools:", error);
-      return {
-        success: false as const,
-        message:
-          error instanceof Error ? error.message : "Internal server error",
-      };
-    }
+    // Legacy clients may submit displayed/overridden definitions. Never trust
+    // those as a shared upstream directory; refresh the saved sources instead.
+    const result = await toolsImplementations.refresh(
+      { namespaceUuid: input.namespaceUuid },
+      userId,
+    );
+    return {
+      success: result.success,
+      message: result.success
+        ? "Tool catalogs refreshed"
+        : (result.error ?? "Tool catalog refresh failed"),
+    };
   },
 };

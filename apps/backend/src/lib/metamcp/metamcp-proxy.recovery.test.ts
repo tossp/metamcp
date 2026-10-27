@@ -5,6 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { ServerParameters } from "@repo/zod-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   getServers: vi.fn(),
+  catalog: vi.fn(),
   auditErrors: [] as unknown[],
 }));
 vi.mock("./client", () => ({ connectMetaMcpClient: mocks.connect }));
@@ -33,8 +35,20 @@ vi.mock("./server-error-tracker", () => ({ serverErrorTracker: {} }));
 vi.mock("../../db/repositories/namespaces.repo", () => ({
   namespacesRepository: { findByUuid: vi.fn().mockResolvedValue({}) },
 }));
-vi.mock("../../trpc/tools.impl", () => ({
-  toolsImplementations: { sync: vi.fn() },
+vi.mock("../../db/repositories/mcp-servers.repo", () => ({
+  mcpServersRepository: { findByUuid: async () => ({ uuid: "backend" }) },
+}));
+vi.mock("../../db/repositories/tool-catalog.repo", () => ({
+  toolCatalogRepository: {
+    findRevisionByServerUuid: async () => 0,
+    findByServerUuid: async () => ({ source: { revision: 0 } }),
+    findByNamespace: async () => [{ source: { uuid: "backend" } }],
+  },
+}));
+vi.mock("./tool-catalog", () => ({ listCatalogTools: mocks.catalog }));
+vi.mock("./utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils")>()),
+  convertDbServerToParams: async () => params,
 }));
 vi.mock("../admin-mcp/tools-registry", () => ({
   isExposedAdminToolName: () => false,
@@ -74,6 +88,8 @@ vi.mock("./metamcp-middleware/tool-overrides.functional", () => ({
 
 import { mcpServerPool } from "./mcp-server-pool";
 import { createServer } from "./metamcp-proxy";
+import { notifyToolCatalogChanged } from "./tool-catalog-events";
+import { createToolCatalogService } from "./tool-catalog-service";
 
 const params: ServerParameters = {
   description: "Recovery test backend",
@@ -88,6 +104,7 @@ const params: ServerParameters = {
   forward_headers: { "x-user": "x-backend-user" },
 };
 const backendCalls = vi.fn();
+const backendLists = vi.fn();
 const connections: ConnectedClient[] = [];
 const frontends: Client[] = [];
 const backendServers: Server[] = [];
@@ -97,12 +114,7 @@ async function newBackend() {
     { name: "blinko", version: "1" },
     { capabilities: { tools: {} } },
   );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      { name: "search", inputSchema: { type: "object" as const } },
-      { name: "write", inputSchema: { type: "object" as const } },
-    ],
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, backendLists);
   server.setRequestHandler(CallToolRequestSchema, backendCalls);
   const client = new Client({ name: "pool", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -119,9 +131,10 @@ async function newBackend() {
   return connection;
 }
 
-async function frontend(id = "session") {
-  // Warm through getSession so tools/list doesn't exercise unrelated startup.
-  await mcpServerPool.getSession(id, params.uuid, params, "namespace");
+async function frontend(id = "session", warm = true) {
+  // Recovery-specific cases deliberately prepare a connection; listing no longer does.
+  if (warm)
+    await mcpServerPool.getSession(id, params.uuid, params, "namespace");
   const { server } = await createServer("namespace", id, false, {
     "x-user": id,
   });
@@ -138,10 +151,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.auditErrors.length = 0;
   connections.length = 0;
+  backendLists.mockReset().mockResolvedValue({ tools: [] });
   backendCalls
     .mockReset()
     .mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
   mocks.getServers.mockResolvedValue({ backend: params });
+  mocks.catalog.mockImplementation(async () =>
+    Object.values(await mocks.getServers()).flatMap((server) => {
+      const source = server as ServerParameters;
+      return ["search", "write"].map((name) => ({
+        serverUuid: source.uuid,
+        serverName: source.name,
+        revision: 0,
+        tool: { name, inputSchema: { type: "object" as const } },
+      }));
+    }),
+  );
   mocks.connect.mockReset().mockImplementation(newBackend);
 });
 afterEach(async () => {
@@ -151,6 +176,75 @@ afterEach(async () => {
 });
 
 describe("tool calls through the real SDK and pool", () => {
+  it("SDK tools/list returns within one second while the real SWR refresher remains blocked", async () => {
+    const row = {
+      source: {
+        uuid: "backend",
+        name: "blinko",
+        user_id: null,
+        forward_headers: null,
+        revision: 0,
+        refreshedAt: new Date(0),
+      },
+      tools: [{ name: "search", inputSchema: { type: "object" as const } }],
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchTools = vi.fn(async () => {
+      await gate;
+      return row.tools;
+    });
+    const service = createToolCatalogService({
+      repository: {
+        findByNamespace: async () => [row],
+        findByServerUuid: async () => row,
+        publish: async () => true,
+      },
+      fetchTools,
+      notify: vi.fn(),
+    });
+    mocks.catalog.mockImplementation(service.listCatalogTools);
+    const started = performance.now();
+    const client = await frontend("slow-refresh", false);
+    expect(performance.now() - started).toBeLessThan(1000);
+    await vi.waitFor(() => expect(fetchTools).toHaveBeenCalledTimes(1));
+    expect((await client.listTools()).tools).toHaveLength(1);
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(fetchTools).toHaveBeenCalledTimes(1);
+    release();
+    await service.refreshCatalogTools("backend");
+  });
+  it("lists cached tools on a cold pool without upstream discovery, and calls only its target", async () => {
+    backendLists.mockImplementation(() => new Promise(() => {}));
+    const client = await frontend("cold", false);
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "blinko__search",
+      "blinko__write",
+    ]);
+    expect(backendLists).not.toHaveBeenCalled();
+    await client.callTool({ name: "blinko__search" });
+    expect(mocks.connect).toHaveBeenCalledTimes(1);
+    expect(backendLists).not.toHaveBeenCalled();
+    expect(backendCalls).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies subscribed SDK clients only after catalog publication", async () => {
+    const client = await frontend("notification", false);
+    const changed = vi.fn();
+    client.setNotificationHandler(ToolListChangedNotificationSchema, changed);
+    notifyToolCatalogChanged("unrelated");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(changed).not.toHaveBeenCalled();
+    notifyToolCatalogChanged("backend");
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    await client.close();
+    notifyToolCatalogChanged("backend");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
   it("recovers after discovery then local transport disconnection, preserving headers and metadata", async () => {
     const client = await frontend();
     await connections[0].client.close();
@@ -318,9 +412,12 @@ describe("tool calls through the real SDK and pool", () => {
     expect(backendCalls).toHaveBeenCalledTimes(1);
   });
 
-  it("detaches all aliases of one failed client and cleans it only once", async () => {
+  it("detaches static-identity aliases of one failed client and cleans it only once", async () => {
     for (let i = 0; i < 6; i++) {
-      await mcpServerPool.getSession(`alias-${i}`, params.uuid, params);
+      await mcpServerPool.getSession(`alias-${i}`, params.uuid, {
+        ...params,
+        forward_headers: {},
+      });
     }
     expect(mocks.connect).toHaveBeenCalledTimes(5);
     const failed = connections[0];

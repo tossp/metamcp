@@ -7,6 +7,8 @@ export const IOTypeSchema = z.enum(["overlapped", "pipe", "ignore", "inherit"]);
 
 export const ServerParametersSchema = z.object({
   uuid: z.string(),
+  // Internal saved-configuration identity; never accepted as a public update input.
+  tool_catalog_revision: z.number().int().nonnegative().optional(),
   name: z.string(),
   description: z.string(),
   type: McpServerTypeEnum.optional().default(McpServerTypeEnum.enum.STDIO),

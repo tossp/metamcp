@@ -689,6 +689,8 @@ export type McpServerUpdateInput = z.infer<typeof McpServerUpdateInputSchema>;
 // Database-specific schemas (raw database results with Date objects)
 export const DatabaseMcpServerSchema = z.object({
   uuid: z.string(),
+  tool_catalog_revision: z.number().int().nonnegative().optional(),
+  tool_catalog_refreshed_at: z.date().nullable().optional(),
   name: z.string(),
   description: z.string().nullable(),
   type: McpServerTypeEnum,

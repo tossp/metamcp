@@ -4,7 +4,7 @@ import {
   McpServerErrorStatusEnum,
   McpServerUpdateInput,
 } from "@repo/zod-types";
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { DatabaseError } from "pg";
 import { z } from "zod";
 
@@ -195,7 +195,11 @@ export class McpServersRepository {
 
         const [updatedServer] = await tx
           .update(mcpServersTable)
-          .set(updateData)
+          .set({
+            ...updateData,
+            tool_catalog_revision: sql`${mcpServersTable.tool_catalog_revision} + 1`,
+            tool_catalog_refreshed_at: null,
+          })
           .where(eq(mcpServersTable.uuid, uuid))
           .returning();
 

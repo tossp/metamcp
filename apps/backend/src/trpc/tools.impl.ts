@@ -3,128 +3,168 @@ import {
   CreateToolResponseSchema,
   GetToolsByMcpServerUuidRequestSchema,
   GetToolsByMcpServerUuidResponseSchema,
+  McpToolSchema,
+  RefreshToolsRequestSchema,
+  RefreshToolsResponseSchema,
 } from "@repo/zod-types";
 import { z } from "zod";
 
 import logger from "@/utils/logger";
 
-import { toolsRepository } from "../db/repositories";
+import { namespacesRepository, toolsRepository } from "../db/repositories";
+import { toolCatalogRepository } from "../db/repositories/tool-catalog.repo";
 import { ToolsSerializer } from "../db/serializers";
-import { toolsSyncCache } from "../lib/metamcp/tools-sync-cache";
+import { refreshCatalogTools } from "../lib/metamcp/tool-catalog";
+import { notifyToolCatalogChanged } from "../lib/metamcp/tool-catalog-events";
+
+type ToolInput = z.infer<typeof CreateToolRequestSchema>;
+const unavailable = "Tool catalog is not available";
+
+async function accessibleCatalog(serverUuid: string, userId: string) {
+  if (!userId) return undefined;
+  const record = await toolCatalogRepository.findByServerUuid(serverUuid);
+  return record &&
+    (record.source.user_id === null || record.source.user_id === userId)
+    ? record
+    : undefined;
+}
+
+async function saveTools(input: ToolInput, userId: string, replace: boolean) {
+  const record = await accessibleCatalog(input.mcpServerUuid, userId);
+  // Public directories must be discovered by the server, not supplied by any reader.
+  if (!record || record.source.user_id !== userId) {
+    return { success: false, count: 0, error: unavailable };
+  }
+  const incoming = input.tools.map((tool) =>
+    McpToolSchema.parse({
+      ...tool,
+      inputSchema: { ...tool.inputSchema, type: "object" },
+    }),
+  );
+  const tools = replace
+    ? incoming
+    : [
+        ...new Map(
+          [...record.tools, ...incoming].map((tool) => [tool.name, tool]),
+        ).values(),
+      ];
+  const saved = await toolCatalogRepository.publish(
+    record.source.uuid,
+    record.source.revision,
+    tools,
+  );
+  if (!saved)
+    return {
+      success: false,
+      count: 0,
+      error: "Tool configuration changed; retry the update",
+    };
+  notifyToolCatalogChanged(record.source.uuid);
+  return { success: true, count: incoming.length };
+}
 
 export const toolsImplementations = {
   getByMcpServerUuid: async (
     input: z.infer<typeof GetToolsByMcpServerUuidRequestSchema>,
+    userId: string,
   ): Promise<z.infer<typeof GetToolsByMcpServerUuidResponseSchema>> => {
     try {
+      if (!(await accessibleCatalog(input.mcpServerUuid, userId))) {
+        return { success: false, data: [], message: unavailable };
+      }
       const tools = await toolsRepository.findByMcpServerUuid(
         input.mcpServerUuid,
       );
-
-      return {
-        success: true as const,
-        data: ToolsSerializer.serializeToolList(tools),
-        message: "Tools retrieved successfully",
-      };
-    } catch (error) {
-      logger.error("Error fetching tools by MCP server UUID:", error);
-      return {
-        success: false as const,
-        data: [],
-        message: "Failed to fetch tools",
-      };
+      return { success: true, data: ToolsSerializer.serializeToolList(tools) };
+    } catch {
+      logger.error("Tool catalog read failed");
+      return { success: false, data: [], message: unavailable };
     }
   },
 
   create: async (
-    input: z.infer<typeof CreateToolRequestSchema>,
+    input: ToolInput,
+    userId: string,
   ): Promise<z.infer<typeof CreateToolResponseSchema>> => {
     try {
-      if (!input.tools || input.tools.length === 0) {
-        return {
-          success: true as const,
-          count: 0,
-          message: "No tools to save",
-        };
-      }
-
-      const results = await toolsRepository.bulkUpsert({
-        tools: input.tools,
-        mcpServerUuid: input.mcpServerUuid,
-      });
-
+      return await saveTools(input, userId, false);
+    } catch {
+      logger.error("Tool catalog save failed");
       return {
-        success: true as const,
-        count: results.length,
-        message: `Successfully saved ${results.length} tools`,
-      };
-    } catch (error) {
-      logger.error("Error saving tools to database:", error);
-      return {
-        success: false as const,
+        success: false,
         count: 0,
-        error: error instanceof Error ? error.message : "Internal server error",
+        error: "Tool catalog could not be saved",
       };
     }
   },
 
-  /**
-   * Smart sync with hash-check and cleanup
-   * Only syncs if tools have actually changed (performance optimized)
-   */
   sync: async (
-    input: z.infer<typeof CreateToolRequestSchema>,
+    input: ToolInput,
+    userId: string,
   ): Promise<z.infer<typeof CreateToolResponseSchema>> => {
     try {
-      if (!input.tools || input.tools.length === 0) {
-        return {
-          success: true as const,
-          count: 0,
-          message: "No tools to sync",
-        };
-      }
-
-      // Check if tools changed using hash
-      const toolNames = input.tools.map((tool) => tool.name);
-      const hasChanged = toolsSyncCache.hasChanged(
-        input.mcpServerUuid,
-        toolNames,
-      );
-
-      if (hasChanged) {
-        // Update cache
-        toolsSyncCache.update(input.mcpServerUuid, toolNames);
-
-        // Perform sync with cleanup
-        const { upserted, deleted } = await toolsRepository.syncTools({
-          tools: input.tools,
-          mcpServerUuid: input.mcpServerUuid,
-        });
-
-        const message =
-          deleted.length > 0
-            ? `Successfully synced ${upserted.length} tools (removed ${deleted.length} obsolete)`
-            : `Successfully synced ${upserted.length} tools`;
-
-        return {
-          success: true as const,
-          count: upserted.length,
-          message,
-        };
-      } else {
-        return {
-          success: true as const,
-          count: input.tools.length,
-          message: "Tools unchanged, skipped sync",
-        };
-      }
-    } catch (error) {
-      console.error("Error syncing tools to database:", error);
+      return await saveTools(input, userId, true);
+    } catch {
+      logger.error("Tool catalog sync failed");
       return {
-        success: false as const,
+        success: false,
         count: 0,
-        error: error instanceof Error ? error.message : "Internal server error",
+        error: "Tool catalog could not be saved",
       };
+    }
+  },
+
+  refresh: async (
+    input: z.infer<typeof RefreshToolsRequestSchema>,
+    userId: string,
+  ): Promise<z.infer<typeof RefreshToolsResponseSchema>> => {
+    try {
+      let serverUuids: string[];
+      if (input.mcpServerUuid) {
+        const record = await accessibleCatalog(input.mcpServerUuid, userId);
+        if (!record) return { success: false, count: 0, error: unavailable };
+        serverUuids = [record.source.uuid];
+      } else if (input.namespaceUuid) {
+        const namespace = await namespacesRepository.findByUuid(
+          input.namespaceUuid,
+        );
+        if (
+          !userId ||
+          !namespace ||
+          (namespace.user_id !== null && namespace.user_id !== userId)
+        ) {
+          return { success: false, count: 0, error: unavailable };
+        }
+        const records = await toolCatalogRepository.findByNamespace(
+          input.namespaceUuid,
+        );
+        serverUuids = records
+          .filter(
+            ({ source }) =>
+              source.user_id === null || source.user_id === userId,
+          )
+          .map(({ source }) => source.uuid);
+        if (records.length !== serverUuids.length) {
+          return { success: false, count: 0, error: unavailable };
+        }
+      } else {
+        return { success: false, count: 0, error: unavailable };
+      }
+      const results = await Promise.all(
+        serverUuids.map((uuid) => refreshCatalogTools(uuid)),
+      );
+      const success = results.every((result) => result.success);
+      return {
+        success,
+        count: results.reduce((sum, result) => sum + result.count, 0),
+        results,
+        ...(!success
+          ? { error: "Some tool catalogs could not be refreshed" }
+          : {}),
+      };
+    } catch {
+      logger.error("Tool catalog refresh failed");
+      return { success: false, count: 0, error: "Tool catalog refresh failed" };
     }
   },
 };

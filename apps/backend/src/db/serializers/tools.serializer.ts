@@ -1,18 +1,4 @@
-import { Tool } from "@repo/zod-types";
-
-type DatabaseTool = {
-  uuid: string;
-  name: string;
-  description: string | null;
-  toolSchema: {
-    type: "object";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    properties?: Record<string, any>;
-  };
-  created_at: Date;
-  updated_at: Date;
-  mcp_server_uuid: string;
-};
+import { DatabaseTool, Tool } from "@repo/zod-types";
 
 export class ToolsSerializer {
   static serializeTool(dbTool: DatabaseTool): Tool {
@@ -21,6 +7,9 @@ export class ToolsSerializer {
       name: dbTool.name,
       description: dbTool.description,
       toolSchema: dbTool.toolSchema,
+      catalog_revision: dbTool.catalog_revision,
+      definition: dbTool.definition,
+      title: dbTool.definition?.title ?? null,
       created_at: dbTool.created_at.toISOString(),
       updated_at: dbTool.updated_at.toISOString(),
       mcp_server_uuid: dbTool.mcp_server_uuid,

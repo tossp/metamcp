@@ -1,0 +1,9 @@
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  envDir: false,
+  test: {
+    environment: "node",
+    include: ["src/db/repositories/__tests__/tool-catalog.*.test.ts"],
+  },
+});

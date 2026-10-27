@@ -148,6 +148,13 @@
       "when": 1785554305427,
       "tag": "0020_oauth_token_consumption",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793086062235,
+      "tag": "0021_tool_catalog",
+      "breakpoints": true
     }
   ]
 }
