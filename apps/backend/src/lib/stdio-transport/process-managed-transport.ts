@@ -51,6 +51,9 @@ export type StdioServerParameters = {
   /** Disable generic process logs when the caller supplies redacted logs. */
   lifecycleLogging?: boolean;
 
+  /** Do not include child stdout in protocol parse errors (Inspector credentials). */
+  redactProtocolErrors?: boolean;
+
   /** Grace period before close escalates from SIGTERM to SIGKILL. */
   terminationGracePeriodMs?: number;
 };
@@ -334,7 +337,11 @@ export class ProcessManagedStdioTransport implements Transport {
 
         this.onmessage?.(message);
       } catch (error) {
-        this.onerror?.(error as Error);
+        this.onerror?.(
+          this._serverParams.redactProtocolErrors
+            ? new Error("Invalid MCP STDIO message")
+            : (error as Error),
+        );
       }
     }
   }

@@ -8,6 +8,8 @@ import logger from "@/utils/logger";
 import { ProcessManagedStdioTransport } from "../stdio-transport/process-managed-transport";
 import {
   createInspectorEnvironment,
+  createInspectorSavedEnvironment,
+  InspectorEnvironment,
   InspectorEnvironmentError,
 } from "./inspector-environment";
 
@@ -84,7 +86,10 @@ export class InspectorStdioLaunchError extends Error {
       | "invalid_request"
       | "restricted_environment"
       | "cooldown"
-      | "spawn_failed",
+      | "spawn_failed"
+      | "unauthorized"
+      | "unavailable"
+      | "configuration_failed",
   ) {
     super(message);
     this.name = "InspectorStdioLaunchError";
@@ -104,7 +109,7 @@ const launchDetails = new WeakMap<
   }
 >();
 
-function normalizeConfigId(value: unknown): string | undefined {
+export function normalizeInspectorConfigId(value: unknown): string | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -155,7 +160,7 @@ function parseLaunchQuery(query: InspectorStdioQuery) {
   return {
     command: cmd,
     args,
-    configId: normalizeConfigId(query.configId),
+    configId: normalizeInspectorConfigId(query.configId),
   };
 }
 
@@ -213,6 +218,37 @@ export async function launchInspectorStdioTransport({
     );
   }
 
+  return launchInspectorProcess(parsed, actorId, terminationGracePeriodMs, () =>
+    createInspectorEnvironment(query.env),
+  );
+}
+
+export interface InspectorSavedStdioConfiguration {
+  configId: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export function launchInspectorSavedStdioTransport(
+  configuration: InspectorSavedStdioConfiguration,
+  actorId: string,
+  terminationGracePeriodMs?: number,
+): Promise<ProcessManagedStdioTransport> {
+  return launchInspectorProcess(
+    configuration,
+    actorId,
+    terminationGracePeriodMs,
+    () => createInspectorSavedEnvironment(configuration.env),
+  );
+}
+
+async function launchInspectorProcess(
+  parsed: ReturnType<typeof parseLaunchQuery>,
+  actorId: string | undefined,
+  terminationGracePeriodMs: number | undefined,
+  createEnvironment: () => Promise<InspectorEnvironment>,
+): Promise<ProcessManagedStdioTransport> {
   const fingerprint = createInspectorStdioFingerprint(
     parsed.command,
     parsed.args,
@@ -233,7 +269,7 @@ export async function launchInspectorStdioTransport({
 
   let environment;
   try {
-    environment = await createInspectorEnvironment(query.env);
+    environment = await createEnvironment();
   } catch (error) {
     if (error instanceof InspectorEnvironmentError) {
       logLifecycle(identity, `environment-rejected-${error.reason}`);
@@ -271,6 +307,7 @@ export async function launchInspectorStdioTransport({
     env: environment.env,
     envMode: "exact",
     lifecycleLogging: false,
+    redactProtocolErrors: true,
     stderr: "pipe",
     terminationGracePeriodMs,
   });
@@ -324,5 +361,3 @@ export function createInspectorStdioRouteAdapters(
     stdio: (input: InspectorStdioLaunchInput) => launch(input),
   };
 }
-
-export const inspectorStdioRouteAdapters = createInspectorStdioRouteAdapters();

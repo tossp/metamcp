@@ -29,6 +29,42 @@ export interface InspectorEnvironment {
   cleanup: () => Promise<void>;
 }
 
+function validateEnvironment(environment: unknown): Record<string, string> {
+  if (
+    environment === null ||
+    Array.isArray(environment) ||
+    typeof environment !== "object"
+  ) {
+    throw new InspectorEnvironmentError(
+      "Inspector environment must be a JSON object",
+      "invalid_env",
+    );
+  }
+  for (const [key, value] of Object.entries(environment)) {
+    if (
+      ENV_PLACEHOLDER_PATTERN.test(key) ||
+      (typeof value === "string" && ENV_PLACEHOLDER_PATTERN.test(value))
+    ) {
+      throw new InspectorEnvironmentError(
+        "Host environment placeholders are not allowed for Inspector children",
+        "placeholder",
+      );
+    }
+    if (
+      !key ||
+      /[=\0]/.test(key) ||
+      typeof value !== "string" ||
+      value.includes("\0")
+    ) {
+      throw new InspectorEnvironmentError(
+        "Inspector environment contains an invalid entry",
+        "invalid_env",
+      );
+    }
+  }
+  return environment as Record<string, string>;
+}
+
 function parseQueryEnvironment(
   rawEnvironment: unknown,
 ): Record<string, string> {
@@ -53,43 +89,15 @@ function parseQueryEnvironment(
     );
   }
 
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new InspectorEnvironmentError(
-      "Inspector environment must be a JSON object",
-      "invalid_env",
-    );
-  }
-
-  const entries = Object.entries(parsed);
-  for (const [key, value] of entries) {
-    if (ENV_PLACEHOLDER_PATTERN.test(key)) {
-      throw new InspectorEnvironmentError(
-        "Host environment placeholders are not allowed for Inspector children",
-        "placeholder",
-      );
-    }
-    if (typeof value !== "string") {
-      throw new InspectorEnvironmentError(
-        "Inspector environment values must be strings",
-        "invalid_env",
-      );
-    }
-    if (ENV_PLACEHOLDER_PATTERN.test(value)) {
-      throw new InspectorEnvironmentError(
-        "Host environment placeholders are not allowed for Inspector children",
-        "placeholder",
-      );
-    }
-  }
-
-  if (entries.length > 0) {
+  const environment = validateEnvironment(parsed);
+  if (Object.keys(environment).length > 0) {
     throw new InspectorEnvironmentError(
       "Inspector request environment is not allowed",
       "nonempty_env",
     );
   }
 
-  return parsed as Record<string, string>;
+  return environment;
 }
 
 export async function createInspectorEnvironment(
@@ -97,7 +105,31 @@ export async function createInspectorEnvironment(
   hostEnvironment: NodeJS.ProcessEnv = process.env,
 ): Promise<InspectorEnvironment> {
   parseQueryEnvironment(rawEnvironment);
+  return createIsolatedEnvironment({}, hostEnvironment);
+}
 
+/** Only authorized server-side saved configurations may supply this environment. */
+export async function createInspectorSavedEnvironment(
+  savedEnvironment: Record<string, string>,
+  hostEnvironment: NodeJS.ProcessEnv = process.env,
+): Promise<InspectorEnvironment> {
+  const environment = validateEnvironment(savedEnvironment);
+  if (
+    Object.hasOwn(environment, "HOME") ||
+    Object.hasOwn(environment, "TMPDIR")
+  ) {
+    throw new InspectorEnvironmentError(
+      "Inspector isolation directories cannot be overridden",
+      "invalid_env",
+    );
+  }
+  return createIsolatedEnvironment(environment, hostEnvironment);
+}
+
+async function createIsolatedEnvironment(
+  savedEnvironment: Record<string, string>,
+  hostEnvironment: NodeJS.ProcessEnv,
+): Promise<InspectorEnvironment> {
   const rootDirectory = await mkdtemp(join(tmpdir(), "metamcp-inspector-"));
   const homeDirectory = join(rootDirectory, "home");
   const tempDirectory = join(rootDirectory, "tmp");
@@ -115,10 +147,10 @@ export async function createInspectorEnvironment(
     await mkdir(homeDirectory, { mode: 0o700 });
     await mkdir(tempDirectory, { mode: 0o700 });
 
-    const env: Record<string, string> = {};
+    const env: Record<string, string> = { ...savedEnvironment };
     for (const key of INSPECTOR_INHERITED_ENV_KEYS) {
       const value = hostEnvironment[key];
-      if (value !== undefined) {
+      if (value !== undefined && !Object.hasOwn(env, key)) {
         env[key] = value;
       }
     }
