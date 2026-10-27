@@ -91,7 +91,30 @@ describe("tryRefreshUpstreamTokens", () => {
         }),
       },
       SERVER.user_id,
+      {
+        tokenRenewal: true,
+        expectedCatalogRevision: undefined,
+        expectedRefreshToken: "RT_old",
+      },
     );
+  });
+
+  it("does not send a new authorization's refresh token using obsolete connection parameters", async () => {
+    const { tryRefreshUpstreamTokens, findByMcpServerUuid, upsert } =
+      await loadModule();
+    findByMcpServerUuid.mockResolvedValue({
+      tool_catalog_revision: 2,
+      tokens: { access_token: "fake-new", refresh_token: "fake-new-refresh" },
+      client_information: { client_id: "fake-new-client" },
+    });
+    const network = vi.spyOn(globalThis, "fetch");
+    const result = await tryRefreshUpstreamTokens({
+      ...SERVER,
+      tool_catalog_revision: 1,
+    });
+    expect(result.status).toBe("no_session");
+    expect(network).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
   });
 
   it("returns no_session when no oauth_sessions row exists", async () => {

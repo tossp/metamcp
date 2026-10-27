@@ -33,6 +33,8 @@ describePg("OAuthSessionsRepository PostgreSQL isolation", () => {
       );
       CREATE TABLE mcp_servers (
         uuid uuid PRIMARY KEY,
+        tool_catalog_revision integer NOT NULL DEFAULT 0,
+        tool_catalog_refreshed_at timestamptz,
         user_id text REFERENCES users(id) ON DELETE CASCADE
       );
       CREATE TABLE oauth_sessions (

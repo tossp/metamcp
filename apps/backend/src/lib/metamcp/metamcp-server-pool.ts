@@ -2,13 +2,12 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
 import logger from "@/utils/logger";
 
+import { toolCatalogRepository } from "../../db/repositories/tool-catalog.repo";
 import {
   clearAdminToolsContext,
   setAdminToolsContext,
 } from "../admin-mcp/admin-session-context";
 import { configService } from "../config.service";
-import { getMcpServers } from "./fetch-metamcp";
-import { anyServerRequiresForwardedHeaders } from "./header-forwarding";
 import { mcpServerPool } from "./mcp-server-pool";
 import { MetaMCPHandlerContext } from "./metamcp-middleware/functional-middleware";
 import { createServer } from "./metamcp-proxy";
@@ -51,7 +50,7 @@ export class MetaMcpServerPool {
   private creatingIdleServers: Set<string> = new Set();
 
   // TTL cache: namespaceUuid -> { needsFresh: boolean, expiresAt: number }
-  // Avoids a redundant getMcpServers() DB query on every getServer() call.
+  // Metadata only: never load saved launch credentials just to obtain a proxy.
   private needsFreshServerCache: Record<
     string,
     { needsFresh: boolean; expiresAt: number }
@@ -101,17 +100,19 @@ export class MetaMcpServerPool {
     // clientRequestHeaders (which is always truthy from the routers).
     // The result is cached with a 60-second TTL to avoid a DB roundtrip
     // on every new session.
-    let needsFreshServer = false;
-    if (clientRequestHeaders) {
+    let needsFreshServer = Boolean(requestContext);
+    if (clientRequestHeaders && !needsFreshServer) {
       const cached = this.needsFreshServerCache[namespaceUuid];
       if (cached && Date.now() < cached.expiresAt) {
         needsFreshServer = cached.needsFresh;
       } else {
-        const serverParams = await getMcpServers(
+        const catalogs = await toolCatalogRepository.findByNamespace(
           namespaceUuid,
           includeInactiveServers,
         );
-        needsFreshServer = anyServerRequiresForwardedHeaders(serverParams);
+        needsFreshServer = catalogs.some(
+          ({ source }) => Object.keys(source.forward_headers ?? {}).length > 0,
+        );
         this.needsFreshServerCache[namespaceUuid] = {
           needsFresh: needsFreshServer,
           expiresAt: Date.now() + 60_000, // 60s TTL

@@ -20,6 +20,7 @@ import {
   oauthSessionsRepository,
 } from "../db/repositories";
 import { McpServersSerializer } from "../db/serializers";
+import { invalidateNamespaceSessionsForServer } from "../lib/metamcp/invalidate-namespace-sessions";
 import { mcpServerPool } from "../lib/metamcp/mcp-server-pool";
 import { clearOverrideCache } from "../lib/metamcp/metamcp-middleware/tool-overrides.functional";
 import { metaMcpServerPool } from "../lib/metamcp/metamcp-server-pool";
@@ -407,6 +408,18 @@ export const mcpServersImplementations = {
         };
       }
 
+      // The repository has already advanced the catalog revision. Drop old
+      // connections before any request can use the new configuration.
+      const updatedRevision =
+        "tool_catalog_revision" in updatedServer &&
+        typeof updatedServer.tool_catalog_revision === "number"
+          ? updatedServer.tool_catalog_revision
+          : undefined;
+      await mcpServerPool.invalidateServerConfiguration(
+        updatedServer.uuid,
+        updatedRevision,
+      );
+
       if (oauthClientInfo) {
         try {
           await persistPreRegisteredOAuthClient(
@@ -463,50 +476,7 @@ export const mcpServersImplementations = {
           });
       }
 
-      // Find affected namespaces and invalidate their idle MetaMCP servers (async)
-      const affectedNamespaceUuids =
-        await namespaceMappingsRepository.findNamespacesByServerUuid(
-          updatedServer.uuid,
-        );
-
-      if (affectedNamespaceUuids.length > 0) {
-        metaMcpServerPool
-          .invalidateIdleServers(affectedNamespaceUuids)
-          .then(() => {
-            logger.info(
-              `Invalidated idle MetaMCP servers for ${affectedNamespaceUuids.length} namespaces after updating server: ${updatedServer.name} (${updatedServer.uuid})`,
-            );
-          })
-          .catch((error) => {
-            logger.error(
-              `Error invalidating idle MetaMCP servers after updating server ${updatedServer.uuid}:`,
-              error,
-            );
-          });
-
-        // Also invalidate OpenAPI sessions for affected namespaces
-        metaMcpServerPool
-          .invalidateOpenApiSessions(affectedNamespaceUuids)
-          .then(() => {
-            logger.info(
-              `Invalidated OpenAPI sessions for ${affectedNamespaceUuids.length} namespaces after updating server: ${updatedServer.name} (${updatedServer.uuid})`,
-            );
-          })
-          .catch((error) => {
-            logger.error(
-              `Error invalidating OpenAPI sessions after updating server ${updatedServer.uuid}:`,
-              error,
-            );
-          });
-
-        // Clear tool overrides cache for affected namespaces since server update may affect tool availability
-        affectedNamespaceUuids.forEach((namespaceUuid) => {
-          clearOverrideCache(namespaceUuid);
-        });
-        logger.info(
-          `Cleared tool overrides cache for ${affectedNamespaceUuids.length} namespaces after updating server: ${updatedServer.name} (${updatedServer.uuid})`,
-        );
-      }
+      await invalidateNamespaceSessionsForServer(updatedServer.uuid);
 
       return {
         success: true as const,

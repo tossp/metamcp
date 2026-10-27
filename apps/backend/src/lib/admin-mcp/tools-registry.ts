@@ -464,24 +464,25 @@ export const ADMIN_TOOLS: AdminToolDefinition[] = [
     "metamcp_get_tools_by_mcp_server",
     "Get cached tools for an MCP server by UUID.",
     GetToolsByMcpServerUuidRequestSchema,
-    async (_userId, input) =>
+    async (userId, input) =>
       toolsImplementations.getByMcpServerUuid(
         GetToolsByMcpServerUuidRequestSchema.parse(input),
+        userId,
       ),
   ),
   defineTool(
     "metamcp_save_tools",
     "Upsert tools for an MCP server in the database.",
     CreateToolRequestSchema,
-    async (_userId, input) =>
-      toolsImplementations.create(CreateToolRequestSchema.parse(input)),
+    async (userId, input) =>
+      toolsImplementations.create(CreateToolRequestSchema.parse(input), userId),
   ),
   defineTool(
     "metamcp_sync_tools",
     "Sync tools for an MCP server, removing obsolete entries.",
     CreateToolRequestSchema,
-    async (_userId, input) =>
-      toolsImplementations.sync(CreateToolRequestSchema.parse(input)),
+    async (userId, input) =>
+      toolsImplementations.sync(CreateToolRequestSchema.parse(input), userId),
   ),
 
   // OAuth sessions (upstream MCP servers)

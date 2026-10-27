@@ -1,4 +1,5 @@
 import { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   McpServerErrorStatusEnum,
   McpServerStatusEnum,
@@ -70,6 +71,12 @@ export const mcpServersTable = pgTable(
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    tool_catalog_revision: integer("tool_catalog_revision")
+      .notNull()
+      .default(0),
+    tool_catalog_refreshed_at: timestamp("tool_catalog_refreshed_at", {
+      withTimezone: true,
+    }),
     bearerToken: text("bearer_token"),
     headers: jsonb("headers")
       .$type<{ [key: string]: string }>()
@@ -157,14 +164,9 @@ export const toolsTable = pgTable(
     uuid: uuid("uuid").primaryKey().defaultRandom(),
     name: text("name").notNull(),
     description: text("description"),
-    toolSchema: jsonb("tool_schema")
-      .$type<{
-        type: "object";
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        properties?: Record<string, any>;
-        required?: string[];
-      }>()
-      .notNull(),
+    toolSchema: jsonb("tool_schema").$type<Tool["inputSchema"]>().notNull(),
+    catalog_revision: integer("catalog_revision").notNull().default(0),
+    definition: jsonb("definition").$type<Tool>(),
     created_at: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

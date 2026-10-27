@@ -44,6 +44,7 @@ export async function getMcpServers(
     const servers = await db
       .select({
         uuid: mcpServersTable.uuid,
+        tool_catalog_revision: mcpServersTable.tool_catalog_revision,
         name: mcpServersTable.name,
         description: mcpServersTable.description,
         type: mcpServersTable.type,
@@ -89,6 +90,7 @@ export async function getMcpServers(
 
       const params: ServerParameters = {
         uuid: server.uuid,
+        tool_catalog_revision: server.tool_catalog_revision,
         name: server.name,
         description: server.description || "",
         type: server.type || "STDIO",

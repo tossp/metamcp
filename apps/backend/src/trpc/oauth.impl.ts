@@ -73,7 +73,7 @@ function upstreamErrorResponse(error: UpstreamTokenError) {
 //   { ok: true, url } — owned/public server with a valid HTTP(S) URL
 //   { ok: false, error } — typed error envelope safe to return to caller
 type ResolveServerResult =
-  | { ok: true; url: string }
+  | { ok: true; url: string; revision?: number }
   | { ok: false; error: { error: string; error_description: string } };
 
 async function resolveOwnedServerUrl(
@@ -104,7 +104,15 @@ async function resolveOwnedServerUrl(
       },
     };
   }
-  return { ok: true, url: server.url };
+  return {
+    ok: true,
+    url: server.url,
+    revision:
+      "tool_catalog_revision" in server &&
+      typeof server.tool_catalog_revision === "number"
+        ? server.tool_catalog_revision
+        : undefined,
+  };
 }
 
 export const oauthImplementations = {
@@ -348,6 +356,7 @@ export const oauthImplementations = {
       name: "frontend-refresh",
       url: serverResolution.url,
       user_id: userId,
+      tool_catalog_revision: serverResolution.revision,
     });
 
     switch (result.status) {

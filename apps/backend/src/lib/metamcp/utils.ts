@@ -107,6 +107,7 @@ export async function convertDbServerToParams(
 
     const params: ServerParameters = {
       uuid: server.uuid,
+      tool_catalog_revision: server.tool_catalog_revision,
       name: server.name,
       description: server.description || "",
       type: server.type || "STDIO",

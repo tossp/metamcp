@@ -1,9 +1,15 @@
 import type { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../index", () => ({ db: {} }));
+vi.mock("../../../lib/metamcp/tool-catalog-events", () => ({
+  invalidateCatalogConnections: vi.fn(),
+}));
+const { invalidateCatalogConnections } =
+  await import("../../../lib/metamcp/tool-catalog-events");
+beforeEach(() => vi.clearAllMocks());
 
 const { OAUTH_STATE_TTL_MS, OAuthSessionsRepository } =
   await import("../oauth-sessions.repo");
@@ -14,7 +20,9 @@ const ACTOR_ID = "user-1";
 function createUpsertDatabase(serverOwner: string | null = ACTOR_ID) {
   const valuesCalls: Record<string, unknown>[] = [];
   const setCalls: Record<string, unknown>[] = [];
+  const revisionUpdates: Record<string, unknown>[] = [];
   let stored: Record<string, unknown> | undefined;
+  let revision = 0;
 
   const database = {
     transaction: vi.fn(async (callback: (tx: unknown) => unknown) => {
@@ -26,12 +34,28 @@ function createUpsertDatabase(serverOwner: string | null = ACTOR_ID) {
               for: async () => {
                 selectCount += 1;
                 if (selectCount === 1) {
-                  return serverOwner === ACTOR_ID ? [{ uuid: SERVER_ID }] : [];
+                  return serverOwner === ACTOR_ID
+                    ? [{ uuid: SERVER_ID, revision }]
+                    : [];
                 }
-                return stored ? [{ owner_user_id: stored.owner_user_id }] : [];
+                return stored
+                  ? [
+                      {
+                        owner_user_id: stored.owner_user_id,
+                        tokens: stored.tokens,
+                      },
+                    ]
+                  : [];
               },
             }),
           }),
+        }),
+        update: () => ({
+          set: (values: Record<string, unknown>) => {
+            revisionUpdates.push(values);
+            revision++;
+            return { where: async () => [] };
+          },
         }),
         insert: () => ({
           values: (values: Record<string, unknown>) => {
@@ -72,10 +96,132 @@ function createUpsertDatabase(serverOwner: string | null = ACTOR_ID) {
     }),
   };
 
-  return { database, valuesCalls, setCalls, getStored: () => stored };
+  return {
+    database,
+    valuesCalls,
+    setCalls,
+    revisionUpdates,
+    getStored: () => stored,
+    revision: () => revision,
+  };
 }
 
 describe("OAuthSessionsRepository.upsert", () => {
+  const seedTokens = {
+    access_token: "fake-old",
+    token_type: "Bearer",
+    refresh_token: "fake-refresh",
+    scope: "read calendar",
+  };
+  const renewed = {
+    access_token: "fake-new",
+    token_type: "Bearer",
+    refresh_token: "fake-rotated",
+  };
+  async function prepared() {
+    const fake = createUpsertDatabase();
+    const repo = new OAuthSessionsRepository(fake.database as never);
+    await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, tokens: seedTokens },
+      ACTOR_ID,
+    );
+    vi.mocked(invalidateCatalogConnections).mockClear();
+    return { fake, repo };
+  }
+  const renewal = {
+    tokenRenewal: true,
+    expectedCatalogRevision: 1,
+    expectedRefreshToken: "fake-refresh",
+  };
+
+  it("retains directory identity and scope during same-grant automatic renewal", async () => {
+    const { fake, repo } = await prepared();
+    const session = await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, tokens: renewed },
+      ACTOR_ID,
+      renewal,
+    );
+    expect(session?.tokens).toMatchObject({
+      ...renewed,
+      scope: "read calendar",
+    });
+    expect(fake.revision()).toBe(1);
+    expect(invalidateCatalogConnections).not.toHaveBeenCalled();
+  });
+
+  it("does not treat equivalent scope ordering as a changed authorization", async () => {
+    const { fake, repo } = await prepared();
+    await repo.upsert(
+      {
+        mcp_server_uuid: SERVER_ID,
+        tokens: { ...renewed, scope: "calendar read read" },
+      },
+      ACTOR_ID,
+      renewal,
+    );
+    expect(fake.revision()).toBe(1);
+    expect(invalidateCatalogConnections).not.toHaveBeenCalled();
+  });
+
+  it("invalidates with the new revision when renewal changes permission scope", async () => {
+    const { fake, repo } = await prepared();
+    await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, tokens: { ...renewed, scope: "read" } },
+      ACTOR_ID,
+      renewal,
+    );
+    expect(fake.revision()).toBe(2);
+    expect(invalidateCatalogConnections).toHaveBeenCalledExactlyOnceWith(
+      SERVER_ID,
+      2,
+    );
+  });
+
+  it("does not let a delayed renewal overwrite explicit reauthorization", async () => {
+    const { fake, repo } = await prepared();
+    await repo.upsert(
+      {
+        mcp_server_uuid: SERVER_ID,
+        tokens: { ...seedTokens, refresh_token: "fake-other-owner" },
+      },
+      ACTOR_ID,
+    );
+    const result = await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, tokens: renewed },
+      ACTOR_ID,
+      renewal,
+    );
+    expect(result).toBeUndefined();
+    expect(fake.revision()).toBe(2);
+    expect(fake.getStored()?.tokens).toHaveProperty(
+      "refresh_token",
+      "fake-other-owner",
+    );
+    expect(fake.valuesCalls).toHaveLength(2);
+  });
+
+  it("uses refresh-token CAS even when a legacy caller has no expected revision", async () => {
+    const { fake, repo } = await prepared();
+    await repo.upsert(
+      { mcp_server_uuid: SERVER_ID, tokens: renewed },
+      ACTOR_ID,
+      renewal,
+    );
+    const result = await repo.upsert(
+      {
+        mcp_server_uuid: SERVER_ID,
+        tokens: { ...renewed, access_token: "fake-late" },
+      },
+      ACTOR_ID,
+      {
+        tokenRenewal: true,
+        expectedRefreshToken: "fake-refresh",
+      },
+    );
+    expect(result).toBeUndefined();
+    expect(fake.getStored()?.tokens).toHaveProperty("access_token", "fake-new");
+    expect(fake.revision()).toBe(1);
+  });
   it("writes owner and state expiry on both INSERT and conflict UPDATE", async () => {
     const fake = createUpsertDatabase();
     const repo = new OAuthSessionsRepository(fake.database as never);
@@ -127,6 +273,15 @@ describe("OAuthSessionsRepository.upsert", () => {
     expect(second?.expected_state).toBe("state-2");
     expect(second?.client_information).toEqual({ client_id: "client-A" });
     expect(fake.setCalls[1]).not.toHaveProperty("client_information");
+    expect(fake.revisionUpdates).toHaveLength(1);
+    expect(fake.revisionUpdates[0]).toHaveProperty(
+      "tool_catalog_refreshed_at",
+      null,
+    );
+    const revision = new PgDialect().sqlToQuery(
+      fake.revisionUpdates[0].tool_catalog_revision as SQL,
+    );
+    expect(revision.sql).toContain('"mcp_servers"."tool_catalog_revision" + 1');
   });
 
   it.each([
@@ -143,5 +298,6 @@ describe("OAuthSessionsRepository.upsert", () => {
 
     expect(result).toBeUndefined();
     expect(fake.valuesCalls).toHaveLength(0);
+    expect(fake.revisionUpdates).toHaveLength(0);
   });
 });

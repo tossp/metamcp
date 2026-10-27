@@ -15,8 +15,8 @@
 // refresh_token on the first attempt and reject the second with
 // `invalid_grant`, leaving one of the two connections stranded. The
 // mutex is in-process only; multi-instance deployments still race across
-// processes (acceptable cost for now — a DB-level CAS would be the
-// follow-up).
+// processes; persistence also checks the expected directory revision and
+// refresh token so a delayed renewal cannot replace a new authorization.
 //
 // Acceptance criterion #3 from the OAuth-CORS-fix PR.
 
@@ -49,6 +49,12 @@ export interface RefreshResult {
 // doesn't permanently pin the server. Exposed for tests; do not depend on
 // it from production code.
 export const inFlightRefreshes = new Map<string, Promise<RefreshResult>>();
+type RefreshServer = Pick<
+  ServerParameters,
+  "uuid" | "name" | "url" | "user_id"
+> & {
+  tool_catalog_revision?: number;
+};
 
 // Attempt to refresh upstream OAuth tokens for an MCP server. Returns a
 // status describing what happened. Persists new tokens on success.
@@ -56,9 +62,13 @@ export const inFlightRefreshes = new Map<string, Promise<RefreshResult>>();
 // NOTE: This is intentionally safe to call repeatedly — it short-circuits
 // when there is no refresh_token or no client_id to use.
 export async function tryRefreshUpstreamTokens(
-  serverParams: Pick<ServerParameters, "uuid" | "name" | "url" | "user_id">,
+  serverParams: RefreshServer,
 ): Promise<RefreshResult> {
-  const inFlight = inFlightRefreshes.get(serverParams.uuid);
+  const key = JSON.stringify([
+    serverParams.uuid,
+    serverParams.tool_catalog_revision ?? null,
+  ]);
+  const inFlight = inFlightRefreshes.get(key);
   if (inFlight) {
     logger.info(
       `[oauth] refresh already in flight for ${serverParams.uuid}; joining`,
@@ -69,16 +79,14 @@ export async function tryRefreshUpstreamTokens(
     try {
       return await doRefresh(serverParams);
     } finally {
-      inFlightRefreshes.delete(serverParams.uuid);
+      inFlightRefreshes.delete(key);
     }
   })();
-  inFlightRefreshes.set(serverParams.uuid, promise);
+  inFlightRefreshes.set(key, promise);
   return promise;
 }
 
-async function doRefresh(
-  serverParams: Pick<ServerParameters, "uuid" | "name" | "url" | "user_id">,
-): Promise<RefreshResult> {
+async function doRefresh(serverParams: RefreshServer): Promise<RefreshResult> {
   if (!serverParams.url || !serverParams.user_id) {
     return { status: "no_session" };
   }
@@ -87,7 +95,11 @@ async function doRefresh(
     serverParams.uuid,
     serverParams.user_id,
   );
-  if (!session) {
+  if (
+    !session ||
+    (serverParams.tool_catalog_revision !== undefined &&
+      session.tool_catalog_revision !== serverParams.tool_catalog_revision)
+  ) {
     return { status: "no_session" };
   }
 
@@ -176,6 +188,12 @@ async function doRefresh(
       tokens: newTokens,
     },
     serverParams.user_id,
+    {
+      tokenRenewal: true,
+      expectedCatalogRevision:
+        serverParams.tool_catalog_revision ?? session.tool_catalog_revision,
+      expectedRefreshToken: currentTokens.refresh_token,
+    },
   );
   if (!persisted) return { status: "no_session" };
 
