@@ -15,14 +15,18 @@ import {
   vi,
 } from "vitest";
 
-const { database } = vi.hoisted(() => ({
-  database: {
-    user: [] as Record<string, unknown>[],
-    account: [] as Record<string, unknown>[],
-    session: [] as Record<string, unknown>[],
-    verification: [] as Record<string, unknown>[],
-  },
-}));
+const { database } = vi.hoisted(() => {
+  // Keep auth rate-limit defaults deterministic, even under NODE_ENV=production.
+  vi.stubEnv("NODE_ENV", "test");
+  return {
+    database: {
+      user: [] as Record<string, unknown>[],
+      account: [] as Record<string, unknown>[],
+      session: [] as Record<string, unknown>[],
+      verification: [] as Record<string, unknown>[],
+    },
+  };
+});
 
 // Exercise the production auth configuration; replace only external persistence
 // and settings. The OIDC provider and application exchange real local HTTP.
@@ -65,6 +69,7 @@ describe("Better Auth 1.7 OIDC callback migration", () => {
   let nonce: string;
   let challenge: string;
   let invalidNonce = false;
+  let profileId: string | number | null | undefined;
   const tokenRequests: URLSearchParams[] = [];
 
   beforeAll(async () => {
@@ -104,6 +109,7 @@ describe("Better Auth 1.7 OIDC callback migration", () => {
       const now = Math.floor(Date.now() / 1000);
       const payload = {
         ...profile,
+        id: profileId,
         iss: issuer,
         aud: clientId,
         iat: now,
@@ -126,7 +132,7 @@ describe("Better Auth 1.7 OIDC callback migration", () => {
         res.sendStatus(401);
         return;
       }
-      res.json(profile);
+      res.json({ ...profile, id: profileId });
     });
     provider = createServer(providerApp).listen(0, "127.0.0.1");
     await once(provider, "listening");
@@ -160,6 +166,7 @@ describe("Better Auth 1.7 OIDC callback migration", () => {
     for (const rows of Object.values(database)) rows.length = 0;
     tokenRequests.length = 0;
     invalidNonce = false;
+    profileId = undefined;
   });
 
   afterAll(async () => {
@@ -213,40 +220,51 @@ describe("Better Auth 1.7 OIDC callback migration", () => {
     expect(database.account).toHaveLength(1);
   });
 
-  it("preserves an existing provider subject binding without creating another user", async () => {
-    const now = new Date();
-    database.user.push({
-      id: "pre-migration-user",
-      name: profile.name,
-      email: profile.email,
-      emailVerified: true,
-      createdAt: now,
-      updatedAt: now,
-    });
-    database.account.push({
-      id: "pre-migration-account",
-      userId: "pre-migration-user",
-      providerId: "oidc",
-      accountId: profile.sub,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const callback = await finishLogin(await startLogin());
-    expect(callback.status).toBe(302);
-    expect(callback.headers.get("location")).toBe(`${origin}/mcp-servers`);
-    expect(database.user).toEqual([
-      expect.objectContaining({ id: "pre-migration-user" }),
-    ]);
-    expect(database.account).toEqual([
-      expect.objectContaining({
+  it.each([
+    { id: undefined, accountId: profile.sub },
+    { id: null, accountId: profile.sub },
+    { id: "", accountId: profile.sub },
+    { id: "legacy-provider-id", accountId: "legacy-provider-id" },
+    { id: 0, accountId: "0" },
+  ])(
+    "preserves the legacy binding for profile id=$id",
+    async ({ id, accountId }) => {
+      profileId = id;
+      const now = new Date();
+      database.user.push({
+        id: "pre-migration-user",
+        name: profile.name,
+        email: "pre-migration@example.test",
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      database.account.push({
         id: "pre-migration-account",
         userId: "pre-migration-user",
-      }),
-    ]);
-    expect(database.session).toEqual([
-      expect.objectContaining({ userId: "pre-migration-user" }),
-    ]);
-  });
+        providerId: "oidc",
+        accountId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const callback = await finishLogin(await startLogin());
+      expect(callback.status).toBe(302);
+      expect(callback.headers.get("location")).toBe(`${origin}/mcp-servers`);
+      expect(database.user).toEqual([
+        expect.objectContaining({ id: "pre-migration-user" }),
+      ]);
+      expect(database.account).toEqual([
+        expect.objectContaining({
+          id: "pre-migration-account",
+          userId: "pre-migration-user",
+          accountId,
+        }),
+      ]);
+      expect(database.session).toEqual([
+        expect.objectContaining({ userId: "pre-migration-user" }),
+      ]);
+    },
+  );
 
   it("does not expose the retired oauth2 callback route", async () => {
     const response = await fetch(`${origin}/api/auth/oauth2/callback/oidc`, {

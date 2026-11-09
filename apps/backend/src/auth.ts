@@ -44,6 +44,11 @@ if (process.env.OIDC_CLIENT_ID && process.env.OIDC_CLIENT_SECRET) {
     pkce: process.env.OIDC_PKCE !== "false", // Enable PKCE by default for security
     discoveryUrl: process.env.OIDC_DISCOVERY_URL,
     authorizationUrl: process.env.OIDC_AUTHORIZATION_URL, // Optional override; otherwise discovered from discoveryUrl.
+    // Preserve 1.6 account IDs instead of silently rebinding existing users to sub.
+    accountSubject: ({ profile }) =>
+      profile.id !== undefined && profile.id !== null && profile.id !== ""
+        ? profile.id
+        : (profile.sub ?? ""),
   };
 
   oidcProviders.push(oidcConfig);
