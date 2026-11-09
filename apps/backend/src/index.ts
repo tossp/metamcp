@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/node";
 import express, { type ErrorRequestHandler } from "express";
 
 import { auth } from "./auth";
+import { createSentryOptions } from "./lib/sentry";
 import { initializeIdleServers, initializeOnStartup } from "./lib/startup";
 import mcpProxyRouter from "./routers/mcp-proxy";
 import oauthRouter from "./routers/oauth";
@@ -12,45 +13,7 @@ import logger from "./utils/logger";
 const sentryDsn = process.env.SENTRY_DSN?.trim();
 
 if (sentryDsn) {
-  Sentry.init({
-    dsn: sentryDsn,
-    integrations: (defaultIntegrations) => [
-      ...defaultIntegrations.filter(
-        (integration) =>
-          integration.name !== "Http" && integration.name !== "Express",
-      ),
-      Sentry.httpIntegration({
-        breadcrumbs: false,
-        maxIncomingRequestBodySize: "none",
-      }),
-      Sentry.expressIntegration(),
-    ],
-    sendDefaultPii: false,
-    tracesSampler: ({ parentSampled }) => {
-      if (parentSampled !== undefined) {
-        return parentSampled ? 1 : 0;
-      }
-
-      return process.env.NODE_ENV === "production" ? 0.1 : 0;
-    },
-    beforeSend(event) {
-      if (event.request) {
-        event.request = {
-          method: event.request.method,
-          url: event.request.url?.split("?")[0],
-        };
-      }
-      if (event.contexts) {
-        delete event.contexts.response;
-      }
-      if (event.extra) {
-        delete event.extra.request;
-        delete event.extra.response;
-      }
-
-      return event;
-    },
-  });
+  Sentry.init(createSentryOptions(sentryDsn));
 }
 
 const app = express();

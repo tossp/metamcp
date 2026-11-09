@@ -258,9 +258,9 @@ MetaMCP supports OpenID Connect for enterprise SSO. When working on OIDC feature
     OIDC_CLIENT_ID=your-oidc-client-id
     OIDC_CLIENT_SECRET=your-oidc-client-secret
     OIDC_DISCOVERY_URL=https://your-provider.com/.well-known/openid-configuration
-    OIDC_AUTHORIZATION_URL=https://your-provider.com/auth/authorize
     
-    # Optional
+    # 可选；默认从 discovery 获取授权端点
+    OIDC_AUTHORIZATION_URL=https://your-provider.com/auth/authorize
     OIDC_PROVIDER_ID=oidc
     OIDC_SCOPES=openid email profile
     OIDC_PKCE=true
@@ -271,10 +271,12 @@ MetaMCP supports OpenID Connect for enterprise SSO. When working on OIDC feature
     **For OIDC development:**
     
     1. Use a test provider (Auth0, Keycloak)
-    2. Configure redirect URI: `${APP_URL}/api/auth/oauth2/callback/oidc`
+    2. Configure redirect URI: `${APP_URL}/api/auth/callback/oidc` (default provider ID: `oidc`)
     3. Test the authentication flow
     4. Verify user creation in database
     5. Enable debug logging for troubleshooting
+
+    Better Auth 1.7 迁移：升级前在同一提供方客户端添加新 URI，暂时保留旧 URI。部署后重新发起登录，验证已有账号、会话及退出，再移除旧 URI；仍有旧实例或需要回退时保留。应用不提供旧 `/api/auth/oauth2/callback/oidc` 路径的兼容转发。自定义 `OIDC_PROVIDER_ID` 时，新 URI 的最后一段使用实际 ID，并与前端 `signIn.social` 请求一致。不要关闭 PKCE、state 或令牌校验。
   </Accordion>
 </AccordionGroup>
 
