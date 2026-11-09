@@ -66,7 +66,7 @@ OIDC_CLIENT_SECRET=your-oidc-client-secret
 OIDC_DISCOVERY_URL=https://your-provider.com/.well-known/openid-configuration
 ```
 
-For now full endpoints discovery is not supported, so you'll need to provide the authorization endpoint:
+Better Auth 1.7 可从 discovery 文档获取端点；仅需覆盖授权端点时设置以下可选变量：
 ```bash
 OIDC_AUTHORIZATION_URL=https://your-provider.com/auth/authorize
 ```
@@ -85,14 +85,22 @@ Once configured, users will see a "Login with OIDC" button on the login page. Th
 ### Security Considerations
 
 - PKCE (Proof Key for Code Exchange) is enabled by default for enhanced security
-- The redirect URI is automatically configured as `${APP_URL}/api/auth/oauth2/callback/oidc`
+- The redirect URI is automatically configured as `${APP_URL}/api/auth/callback/oidc` (default provider ID: `oidc`)
 - Ensure your OIDC provider is configured to allow this redirect URI
+
+### Better Auth 1.7 回调迁移
+
+1. 升级前，在身份提供方的同一客户端中添加 `${APP_URL}/api/auth/callback/oidc`，暂时保留旧回调 URI，以兼容尚未升级的实例。不要使用通配符。
+2. 部署使用 Better Auth 1.7 的应用，重新发起 OIDC 登录；升级前已发起的登录应重新开始。应用不提供旧 `/api/auth/oauth2/callback/oidc` 路径的兼容转发。
+3. 确认授权请求的 `redirect_uri`、令牌交换的回调地址均为新 URI，并完成已有账号登录、会话读取及退出验证，再移除提供方的旧 URI。尚有旧实例或需要回退时保留旧 URI。
+
+以上示例假定 `OIDC_PROVIDER_ID=oidc`。自定义提供方 ID 时，使用 `${APP_URL}/api/auth/callback/<实际 providerId>`，并确认前端 `signIn.social` 请求相同 ID。保留 PKCE、state 和 OIDC 令牌校验；不需要更改 DSN、认证密钥或数据库 schema。
 
 ### Troubleshooting
 
 **Common Issues:**
 
-1. **Invalid Redirect URI**: Ensure your OIDC provider allows `${APP_URL}/api/auth/oauth2/callback/oidc`
+1. **Invalid Redirect URI**: Ensure your OIDC provider allows `${APP_URL}/api/auth/callback/oidc`
 2. **Scope Issues**: Some providers require specific scopes beyond the default `openid email profile`
 3. **User Creation**: Users are automatically created on first login. Ensure your provider returns email and name claims
 
