@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { DomainWarningBanner } from "@/components/domain-warning-banner";
 import { LanguageSwitcher } from "@/components/language-switcher";
@@ -11,6 +11,11 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTranslations } from "@/hooks/useTranslations";
 import { authClient } from "@/lib/auth-client";
+import {
+  getLocalRegistrationPolicy,
+  loadLocalAuthPolicy,
+  RegistrationPolicy,
+} from "@/lib/local-auth-policy";
 import { vanillaTrpcClient } from "@/lib/trpc";
 
 function LoadingFallback() {
@@ -34,58 +39,46 @@ function RegisterForm() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [isSignupDisabled, setIsSignupDisabled] = useState(false);
-  const [checkingSignupStatus, setCheckingSignupStatus] = useState(true);
+  const [registrationPolicy, setRegistrationPolicy] =
+    useState<RegistrationPolicy | null>(null);
 
   const router = useRouter();
 
-  // Function to check signup status
-  const checkSignupStatus = async () => {
-    try {
-      const isDisabled =
-        await vanillaTrpcClient.frontend.config.getSignupDisabled.query();
-      setIsSignupDisabled(isDisabled);
-    } catch (error) {
-      console.error("Failed to check signup status:", error);
-      // If we can't check, allow signup to proceed (fail open)
-      setIsSignupDisabled(false);
-    } finally {
-      setCheckingSignupStatus(false);
-    }
-  };
+  const checkSignupStatus =
+    useCallback(async (): Promise<RegistrationPolicy> => {
+      const policy = await loadLocalAuthPolicy(
+        vanillaTrpcClient.frontend.config,
+      );
+      const currentPolicy = getLocalRegistrationPolicy(policy);
+      setRegistrationPolicy(currentPolicy);
+      return currentPolicy;
+    }, []);
 
-  // Check signup status on mount
   useEffect(() => {
-    checkSignupStatus();
-  }, []);
+    void checkSignupStatus();
+  }, [checkSignupStatus]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Re-check signup status before attempting to register
-    await checkSignupStatus();
-
-    if (isSignupDisabled) {
-      setError(t("auth:registrationDisabledError"));
-      return;
-    }
-
     setIsLoading(true);
     setError("");
 
-    if (password !== confirmPassword) {
-      setError(t("auth:passwordsDoNotMatch"));
-      setIsLoading(false);
-      return;
-    }
-
-    if (password.length < 8) {
-      setError(t("auth:passwordTooShort"));
-      setIsLoading(false);
-      return;
-    }
-
     try {
+      // Use the freshly returned policy, not the previous render's state.
+      const currentPolicy = await checkSignupStatus();
+      if (currentPolicy !== "allowed") return;
+
+      if (password !== confirmPassword) {
+        setError(t("auth:passwordsDoNotMatch"));
+        return;
+      }
+
+      if (password.length < 8) {
+        setError(t("auth:passwordTooShort"));
+        return;
+      }
+
       const { error } = await authClient.signUp.email({
         email,
         password,
@@ -94,17 +87,8 @@ function RegisterForm() {
       });
 
       if (error) {
-        // Check if signup is actually disabled by checking the current status
-        const currentSignupStatus =
-          await vanillaTrpcClient.frontend.config.getSignupDisabled.query();
-
-        if (currentSignupStatus) {
-          // Signup is actually disabled, show that message
-          setError(t("auth:registrationDisabledError"));
-          setIsSignupDisabled(true);
-        } else {
-          // Signup is enabled but registration failed for other reasons (validation, etc.)
-          // Show the actual error message from the backend
+        const currentPolicy = await checkSignupStatus();
+        if (currentPolicy === "allowed") {
           setError(error.message || t("auth:registrationFailed"));
         }
       } else {
@@ -112,23 +96,9 @@ function RegisterForm() {
         router.refresh();
       }
     } catch (err) {
-      // Handle any other errors
       console.error("Registration error:", err);
-
-      // Check if signup is actually disabled
-      try {
-        const currentSignupStatus =
-          await vanillaTrpcClient.frontend.config.getSignupDisabled.query();
-
-        if (currentSignupStatus) {
-          setError(t("auth:registrationDisabledError"));
-          setIsSignupDisabled(true);
-        } else {
-          // Show the actual error message or a generic fallback
-          setError((err as Error)?.message || t("auth:registrationFailed"));
-        }
-      } catch (_statusCheckError) {
-        // If we can't check status, just show the original error
+      const currentPolicy = await checkSignupStatus();
+      if (currentPolicy === "allowed") {
         setError((err as Error)?.message || t("auth:registrationFailed"));
       }
     } finally {
@@ -136,7 +106,7 @@ function RegisterForm() {
     }
   };
 
-  if (checkingSignupStatus) {
+  if (registrationPolicy === null) {
     return (
       <div className="space-y-6">
         <div className="space-y-2 text-center">
@@ -148,15 +118,25 @@ function RegisterForm() {
     );
   }
 
-  if (isSignupDisabled) {
+  if (registrationPolicy !== "allowed") {
     return (
       <div className="space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">
-            {t("auth:registrationDisabled")}
+            {t(
+              registrationPolicy === "unavailable"
+                ? "auth:registrationFailed"
+                : "auth:registrationDisabled",
+            )}
           </h1>
           <p className="text-sm text-muted-foreground">
-            {t("auth:registrationDisabledMessage")}
+            {t(
+              registrationPolicy === "basic-auth-disabled"
+                ? "auth:basicAuthDisabledMessage"
+                : registrationPolicy === "unavailable"
+                  ? "auth:registrationFailed"
+                  : "auth:registrationDisabledMessage",
+            )}
           </p>
         </div>
         <div className="text-center text-sm">

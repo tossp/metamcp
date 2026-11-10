@@ -37,7 +37,7 @@ vi.mock("better-auth/adapters/drizzle", async () => {
 });
 vi.mock("./lib/config.service", () => ({
   configService: {
-    isBasicAuthDisabled: async () => false,
+    isBasicAuthDisabled: async () => true,
     isSignupDisabled: async () => false,
     isSsoSignupDisabled: async () => false,
   },
