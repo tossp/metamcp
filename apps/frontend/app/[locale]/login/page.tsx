@@ -11,6 +11,12 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useTranslations } from "@/hooks/useTranslations";
 import { authClient } from "@/lib/auth-client";
+import {
+  canSignInLocally,
+  getLocalRegistrationPolicy,
+  loadLocalAuthPolicy,
+  LocalAuthPolicy,
+} from "@/lib/local-auth-policy";
 import { vanillaTrpcClient } from "@/lib/trpc";
 
 function LoginForm() {
@@ -19,8 +25,8 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [isSignupDisabled, setIsSignupDisabled] = useState(false);
-  const [isBasicAuthDisabled, setIsBasicAuthDisabled] = useState(false);
+  const [authPolicy, setAuthPolicy] = useState<LocalAuthPolicy | null>(null);
+  const isLocalSignInAllowed = canSignInLocally(authPolicy);
   const [isOidcLoading, setIsOidcLoading] = useState(false);
   const [isOidcEnabled, setIsOidcEnabled] = useState(false);
   const [authProvidersLoading, setAuthProvidersLoading] = useState(true);
@@ -29,34 +35,10 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
 
-  // Check if signup is disabled
   useEffect(() => {
-    const checkSignupStatus = async () => {
-      try {
-        const isDisabled =
-          await vanillaTrpcClient.frontend.config.getSignupDisabled.query();
-        setIsSignupDisabled(isDisabled);
-      } catch (error) {
-        console.error("Failed to fetch signup status:", error);
-      }
-    };
-
-    checkSignupStatus();
-  }, []);
-
-  // Check if basic auth is disabled
-  useEffect(() => {
-    const checkBasicAuthStatus = async () => {
-      try {
-        const isDisabled =
-          await vanillaTrpcClient.frontend.config.getBasicAuthDisabled.query();
-        setIsBasicAuthDisabled(isDisabled);
-      } catch (error) {
-        console.error("Failed to fetch basic auth config:", error);
-      }
-    };
-
-    checkBasicAuthStatus();
+    void loadLocalAuthPolicy(vanillaTrpcClient.frontend.config).then(
+      setAuthPolicy,
+    );
   }, []);
 
   // Check if OIDC is enabled
@@ -81,6 +63,7 @@ function LoginForm() {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isLocalSignInAllowed) return;
     setIsLoading(true);
     setError("");
 
@@ -124,18 +107,26 @@ function LoginForm() {
         <h1 className="text-2xl font-semibold tracking-tight">
           {t("auth:signInToAccount")}
         </h1>
-        <p className="text-sm text-muted-foreground">
-          {t("auth:enterCredentials")}
-        </p>
+        {isLocalSignInAllowed && (
+          <p className="text-sm text-muted-foreground">
+            {t("auth:enterCredentials")}
+          </p>
+        )}
       </div>
 
-      {error && (
+      {(error || authPolicy?.basicAuthDisabled === null) && (
         <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
-          {error}
+          {error || t("auth:signInError")}
         </div>
       )}
 
-      {!isBasicAuthDisabled && (
+      {authPolicy === null && (
+        <p className="text-center text-sm text-muted-foreground">
+          {t("common:loading")}
+        </p>
+      )}
+
+      {isLocalSignInAllowed && (
         <form onSubmit={handleSignIn} className="space-y-4">
           <div className="space-y-2">
             <label htmlFor="email" className="text-sm font-medium">
@@ -173,15 +164,17 @@ function LoginForm() {
         </form>
       )}
 
-      {isBasicAuthDisabled && !isOidcEnabled && (
-        <div className="rounded-md bg-muted/50 p-4 text-center text-sm text-muted-foreground">
-          {t("auth:basicAuthDisabledMessage")}
-        </div>
-      )}
+      {authPolicy?.basicAuthDisabled === true &&
+        !authProvidersLoading &&
+        !isOidcEnabled && (
+          <div className="rounded-md bg-muted/50 p-4 text-center text-sm text-muted-foreground">
+            {t("auth:basicAuthDisabledMessage")}
+          </div>
+        )}
 
       {!authProvidersLoading && isOidcEnabled && (
         <>
-          {!isBasicAuthDisabled && (
+          {isLocalSignInAllowed && (
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
                 <span className="w-full border-t" />
@@ -205,7 +198,7 @@ function LoginForm() {
         </>
       )}
 
-      {!isSignupDisabled && (
+      {getLocalRegistrationPolicy(authPolicy) === "allowed" && (
         <div className="text-center text-sm">
           <span className="text-muted-foreground">{t("auth:noAccount")} </span>
           <Link href="/register" className="underline underline-offset-4">

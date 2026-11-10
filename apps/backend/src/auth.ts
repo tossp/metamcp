@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { genericOAuth, GenericOAuthConfig } from "better-auth/plugins";
 
 import { db } from "./db/index";
@@ -18,18 +19,15 @@ if (!process.env.APP_URL) {
 const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
 const BETTER_AUTH_URL = process.env.APP_URL;
 
-// Helper function to create basic auth middleware
-const createBasicAuthCheckMiddleware = () => {
-  return async (request: unknown) => {
-    const isBasicAuthDisabled = await configService.isBasicAuthDisabled();
-    if (isBasicAuthDisabled) {
-      throw new Error(
-        "Basic email/password authentication is currently disabled. Please use SSO/OIDC authentication instead.",
-      );
-    }
-    return { request };
-  };
-};
+const passwordAuthPaths = new Set([
+  "/sign-in/email",
+  "/sign-up/email",
+  "/request-password-reset",
+  "/reset-password",
+  "/reset-password/:token",
+  "/change-password",
+  "/verify-password",
+]);
 
 // OIDC Provider configuration - optional, only if environment variables are provided
 const oidcProviders: GenericOAuthConfig[] = [];
@@ -97,7 +95,7 @@ export const auth = betterAuth({
       : []),
   ],
   emailAndPassword: {
-    enabled: true, // This will be dynamically controlled by middleware
+    enabled: true, // The before hook applies the current password policy per request.
     requireEmailVerification: false, // Set to true if you want email verification
   },
   account: {
@@ -178,25 +176,18 @@ export const auth = betterAuth({
       },
     },
   },
-  // Add middleware to check basic auth setting
-  middleware: [
-    {
-      path: "/sign-in/email",
-      middleware: createBasicAuthCheckMiddleware(),
-    },
-    {
-      path: "/sign-up/email",
-      middleware: createBasicAuthCheckMiddleware(),
-    },
-    {
-      path: "/forgot-password",
-      middleware: createBasicAuthCheckMiddleware(),
-    },
-    {
-      path: "/reset-password",
-      middleware: createBasicAuthCheckMiddleware(),
-    },
-  ],
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (!passwordAuthPaths.has(ctx.path)) return;
+      if (await configService.isBasicAuthDisabled()) {
+        throw new APIError("FORBIDDEN", {
+          code: "PASSWORD_AUTH_DISABLED",
+          message:
+            "Email/password authentication is disabled. Please use SSO/OIDC instead.",
+        });
+      }
+    }),
+  },
 });
 
 console.log("✓ Better Auth instance created successfully");
