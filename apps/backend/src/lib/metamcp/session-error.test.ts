@@ -22,6 +22,31 @@ describe("isBackendSessionLostError", () => {
     expect(isBackendSessionLostError(error)).toBe(true);
   });
 
+  it.each([-32000, -32001, -32600])(
+    "matches Blinko session rejection with code %s in legacy and structured errors",
+    (code) => {
+      const envelope = { error: { code, message: "MCP session not found" } };
+      const error = new Error(
+        `Error POSTing to endpoint (HTTP 404): ${JSON.stringify(envelope)}`,
+      );
+      expect(isBackendSessionLostError(error)).toBe(true);
+      expect(isBackendSessionLostError(envelope)).toBe(true);
+      expect(isSafeToRetryToolCall(error, false)).toBe(true);
+      expect(
+        isBackendSessionLostError(
+          Object.assign(new Error("MCP session not found"), { code }),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not treat generic -32000 errors as a lost session", () => {
+    expect(isBackendSessionLostError({ code: -32000 })).toBe(false);
+    expect(
+      isBackendSessionLostError({ code: -32000, message: "Business failure" }),
+    ).toBe(false);
+  });
+
   it("does not match unrelated 404s", () => {
     const error = new Error("Error POSTing to endpoint (HTTP 404): Not Found");
     expect(isBackendSessionLostError(error)).toBe(false);
