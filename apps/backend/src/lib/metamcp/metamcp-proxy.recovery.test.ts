@@ -1,4 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -322,6 +323,7 @@ describe("tool calls through the real SDK and pool", () => {
     new McpError(-32603, "Not connected"),
     new McpError(-32603, "Internal error"),
     new McpError(-32001, "Business failure"),
+    new McpError(-32000, "MCP session not found"),
     new Error("Not connected to billing after write"),
     new Error("Timeout"),
   ])("does not retry remote business errors: %s", async (error) => {
@@ -399,6 +401,42 @@ describe("tool calls through the real SDK and pool", () => {
     expect(mocks.connect).toHaveBeenCalledTimes(2);
     expect(backendCalls).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "handles Blinko's SDK HTTP 404 once (replacement also fails: %s)",
+    async (replacementFails) => {
+      const client = await frontend();
+      const error = new StreamableHTTPError(
+        404,
+        'Error POSTing to endpoint: {"error":{"code":-32000,"message":"MCP session not found"}}',
+      );
+      vi.spyOn(connections[0].client, "request").mockRejectedValueOnce(error);
+      if (replacementFails)
+        mocks.connect.mockImplementationOnce(async () => {
+          const fresh = await newBackend();
+          vi.spyOn(fresh.client, "request").mockRejectedValueOnce(error);
+          return fresh;
+        });
+      const result = client.callTool({
+        name: "blinko__write",
+        arguments: { value: "test" },
+        _meta: { trace: "retry" },
+      });
+      if (replacementFails) await expect(result).rejects.toThrow("会话已失效");
+      else {
+        expect((await result).isError).not.toBe(true);
+        expect(backendCalls.mock.calls[0][0].params).toMatchObject({
+          name: "write",
+          arguments: { value: "test" },
+          _meta: { trace: "retry" },
+        });
+      }
+      expect(mocks.connect).toHaveBeenCalledTimes(2);
+      expect(connections[0].cleanup).toHaveBeenCalledTimes(1);
+      expect(connections[1].cleanup).not.toHaveBeenCalled();
+      expect(backendCalls).toHaveBeenCalledTimes(replacementFails ? 0 : 1);
+    },
+  );
 
   it("releases the acquisition guard when reconnect fails", async () => {
     const client = await frontend();

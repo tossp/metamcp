@@ -1,13 +1,17 @@
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
 /**
  * Detect errors that indicate the backend MCP server's session registry no
  * longer knows our Mcp-Session-Id. Per the MCP Streamable HTTP spec, the
  * backend SHOULD respond with HTTP 404 when it cannot find the session; most
- * SDKs also surface a JSON-RPC error body with code -32001 or -32600 and
- * message "Session not found".
+ * SDKs also surface a JSON-RPC error body with code -32000, -32001 or
+ * -32600 and message "Session not found" or "MCP session not found".
+ * Current SDK versions use StreamableHTTPError.code for the HTTP status;
+ * older versions embed it in the message as shown below.
  *
- * The MCP TypeScript SDK's StreamableHTTPClientTransport wraps this as a
- * generic Error whose message embeds the HTTP status and raw JSON-RPC body,
- * so we match on substrings. Example:
+ * Older MCP TypeScript SDK transports wrapped this as a generic Error
+ * embedding the HTTP status and raw JSON-RPC body, so the broad read-only
+ * recovery detector also accepts substring matches. Example:
  *
  *   Error POSTing to endpoint (HTTP 404):
  *   {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Session not found"}}
@@ -32,9 +36,9 @@
  * this is the normative recovery path, not a workaround.
  */
 
-const SESSION_NOT_FOUND = "Session not found";
+const SESSION_NOT_FOUND = "session not found";
 const HTTP_404 = "HTTP 404";
-const RPC_CODE_PATTERNS = ["-32001", "-32600"];
+const RPC_CODE_PATTERNS = ["-32000", "-32001", "-32600"];
 const MAX_CAUSE_DEPTH = 8;
 
 /** Tool calls may write data: accept only explicit pre-execution failures. */
@@ -57,13 +61,22 @@ export function isSafeToRetryToolCall(
   }
 
   // Streamable HTTP reports the rejected session before dispatching the call.
-  const prefix = "Error POSTing to endpoint (HTTP 404): ";
+  const prefix =
+    error instanceof StreamableHTTPError && error.code === 404
+      ? "Streamable HTTP error: Error POSTing to endpoint: "
+      : "Error POSTing to endpoint (HTTP 404): ";
   if (!error.message.startsWith(prefix)) return false;
   try {
     const body = JSON.parse(error.message.slice(prefix.length));
+    const message = body?.error?.message;
     return (
-      body?.error?.message === "Session not found" &&
-      (body.error.code === -32001 || body.error.code === -32600)
+      typeof message === "string" &&
+      [SESSION_NOT_FOUND, `mcp ${SESSION_NOT_FOUND}`].includes(
+        message.toLowerCase(),
+      ) &&
+      (body.error.code === -32000 ||
+        body.error.code === -32001 ||
+        body.error.code === -32600)
     );
   } catch {
     return false;
@@ -98,7 +111,9 @@ const NOT_CONNECTED = "Not connected";
 const RPC_CODE_TRANSPORT_LOST = "-32603";
 
 function stringMatchesSessionLost(value: string): boolean {
-  const mentionsSessionNotFound = value.includes(SESSION_NOT_FOUND);
+  const mentionsSessionNotFound = value
+    .toLowerCase()
+    .includes(SESSION_NOT_FOUND);
   const mentionsHttp404 = value.includes(HTTP_404);
   const mentionsSessionErrorCode = RPC_CODE_PATTERNS.some((code) =>
     value.includes(code),
@@ -112,7 +127,14 @@ function objectHasSessionLostCode(candidate: unknown): boolean {
   if (typeof candidate !== "object" || candidate === null) {
     return false;
   }
-  const code = (candidate as { code?: unknown }).code;
+  const { code, message } = candidate as { code?: unknown; message?: unknown };
+  // -32000 is also used for business errors; require the session marker.
+  if (code === -32000 || code === "-32000") {
+    return (
+      typeof message === "string" &&
+      message.toLowerCase().includes(SESSION_NOT_FOUND)
+    );
+  }
   if (typeof code === "number") {
     return code === -32001 || code === -32600;
   }
